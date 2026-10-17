@@ -196,19 +196,37 @@ function splitBy(lines, isHead) {
   }
   return { pre: trimLines(pre), secs: secs.map(x => ({ head: x.head, lines: trimLines(x.lines) })) };
 }
-/* 제목 줄 규칙: "1. 제목", "[제목]", "# 제목"이 큰 제목, "①"이 그 안의 작은 제목. 큰 제목이 없으면 "①"이 큰 제목. */
+/* 제목 줄 규칙(v13): 40자 이하의 "1. 제목", "[제목]" 한 줄, "# 제목"이 큰 제목, "①"이 그 안의 작은 제목.
+   번호가 붙은 긴 줄(목록 항목)은 제목으로 보지 않는다. 큰 제목이 없으면 빈 줄로 나뉜 덩어리의 첫 줄을 제목으로 쓴다. */
+const HEAD_MAX = 40;
+const isTop = l => TOP_RE.test(l) && l.trim().length <= HEAD_MAX;
+function splitBlocks(lines) {
+  const blocks = []; let cur = [];
+  for (const ln of lines) { if (ln.trim()) cur.push(ln); else if (cur.length) { blocks.push(cur); cur = []; } }
+  if (cur.length) blocks.push(cur);
+  return blocks;
+}
 export function splitSections(text) {
   const lines = String(text || "").split("\n");
-  const useTop = lines.some(l => TOP_RE.test(l));
-  const top = splitBy(lines, l => (useTop ? TOP_RE : SUB_RE).test(l));
-  return {
-    intro: top.pre.join("\n"),
-    secs: top.secs.map(x => {
-      const sub = useTop && x.lines.some(l => SUB_RE.test(l)) ? splitBy(x.lines, l => SUB_RE.test(l)) : null;
-      return { head: x.head, n: countLines(x.lines), pre: sub ? sub.pre.join("\n") : x.lines.join("\n"),
-        subs: sub ? sub.secs.map(y => ({ head: y.head, n: countLines(y.lines), body: y.lines.join("\n") })) : [] };
-    })
-  };
+  if (lines.some(isTop)) {
+    const top = splitBy(lines, isTop);
+    return {
+      intro: top.pre.join("\n"),
+      secs: top.secs.map(x => {
+        const sub = x.lines.some(l => SUB_RE.test(l)) ? splitBy(x.lines, l => SUB_RE.test(l)) : null;
+        return { head: x.head, n: countLines(x.lines), pre: sub ? sub.pre.join("\n") : x.lines.join("\n"),
+          subs: sub ? sub.secs.map(y => ({ head: y.head, n: countLines(y.lines), body: y.lines.join("\n") })) : [] };
+      })
+    };
+  }
+  if (lines.some(l => SUB_RE.test(l))) {
+    const top = splitBy(lines, l => SUB_RE.test(l));
+    return { intro: top.pre.join("\n"), secs: top.secs.map(x => ({ head: x.head, n: countLines(x.lines), pre: x.lines.join("\n"), subs: [] })) };
+  }
+  const blocks = splitBlocks(lines);
+  if (blocks.length < 2) return { intro: lines.join("\n").trim(), secs: [] };
+  const first = blocks[0].length === 1 ? blocks.shift() : null;
+  return { intro: first ? first.join("\n") : "", secs: blocks.map(b => ({ head: b[0].trim(), n: b.length - 1, pre: b.slice(1).join("\n"), subs: [] })) };
 }
 export function foldText(path, field, remoteVal, targetLabel, fieldLabel, opts = {}) {
   const key = path + "#" + field;
