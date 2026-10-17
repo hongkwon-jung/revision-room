@@ -5,17 +5,17 @@ import {
   ownerOptions, itemLabel, itemById, reviewerName, codesOf, codeText, lsSet, saveOpen, copyText, STATUS,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot,
   serverTimestamp, writeBatch
-} from "./core.js?v=13";
-import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=13";
-import { renderFiles } from "./files.js?v=13";
-import { renderChat } from "./chat.js?v=13";
-import { plainOf } from "./markup.js?v=13";
-import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=13";
+} from "./core.js?v=14";
+import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=14";
+import { renderFiles } from "./files.js?v=14";
+import { renderChat } from "./chat.js?v=14";
+import { plainOf } from "./markup.js?v=14";
+import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=14";
 
 const J_STATUS = ["후보", "검토 중", "유력", "제외", "확정"];
 const TABS = [
   ["items", "심사평 대응"], ["ms", "원고 검토"], ["chat", "회의·대화"], ["tasks", "할 일·일정"],
-  ["journals", "후보 저널"], ["files", "자료실"], ["docs", "메모·자료"], ["log", "수정 기록"], ["members", "멤버"]
+  ["journals", "후보 저널"], ["files", "자료실"], ["docs", "메모·자료"], ["archive", "이전 작업"], ["log", "수정 기록"], ["members", "멤버"]
 ];
 const ITEM_FIELDS = [
   ["location", "제출본 위치", false],
@@ -194,7 +194,8 @@ function renderTab() {
   switch (S.tab) {
     case "tasks": return renderTasks();
     case "journals": return renderJournals();
-    case "docs": return renderDocs();
+    case "docs": return renderDocs(false);
+    case "archive": return renderDocs(true);
     case "log": return renderLog();
     case "chat": return renderChat();
     case "files": return renderFiles();
@@ -519,19 +520,27 @@ function renderJournals() {
 }
 
 /* ---------- 메모·자료 ---------- */
-function renderDocs() {
-  const addBtn = h("button", { text: "자료 추가", onclick: async () => {
+/* v14: 메모·자료(현재 자료)와 이전 작업(지난 판·백업)을 나눈다. archived: true인 자료는 이전 작업 탭에만 보인다 */
+function renderDocs(archived) {
+  const list = S.docs.filter(d => !!d.archived === archived);
+  const addBtn = archived ? null : h("button", { text: "자료 추가", onclick: async () => {
     const order = Math.max(0, ...S.docs.map(d => d.order || 0)) + 1;
     try { await addDoc(collection(db, "docs"), { order, title: "새 자료", body: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: myName() }); await writeLog("자료 추가", "메모·자료", "", "", ""); }
     catch (e) { toast("추가 실패: " + errMsg(e)); }
   } });
-  const nodes = [keyed(h("div", { class: "bar" }, h("span", { class: "count", text: `${S.docs.length}개` }), h("span", { class: "grow" }), addBtn), "bar", String(S.docs.length))];
-  for (const d of S.docs) {
+  const note = archived ? "지난 판과 백업입니다. 지금 기준이 되는 내용은 각 탭에 있습니다." : "";
+  const nodes = [keyed(h("div", { class: "bar" }, h("span", { class: "count", text: `${list.length}개` }), note ? h("span", { class: "muted", text: note }) : null, h("span", { class: "grow" }), addBtn), "bar" + archived, String(list.length))];
+  const move = d => h("button", { class: "small", text: archived ? "메모·자료로 되돌리기" : "이전 작업으로", onclick: async () => {
+    try { await updateDoc(doc(db, "docs", d.id), { archived: !archived, updatedAt: serverTimestamp(), updatedBy: myName() }); await writeLog(archived ? "자료 되돌리기" : "이전 작업으로", d.title, "", "", ""); }
+    catch (e) { toast(errMsg(e)); }
+  } });
+  for (const d of list) {
     const path = "docs/" + d.id;
     const key = d.id + ":doc";
     const card = h("div", { class: "card" },
       h("div", { class: "card-head" }, editInput(path, "title", d.title, "자료", "제목", { cls: "topic" }),
         h("span", { class: "meta", text: d.updatedBy ? `마지막 수정 ${d.updatedBy} · ${fmt(d.updatedAt)}` : "" }),
+        move(d),
         S.isAdmin ? confirmButton("삭제", async () => { try { await deleteDoc(doc(db, "docs", d.id)); await writeLog("자료 삭제", d.title, "", "", ""); } catch (e) { toast(errMsg(e)); } }, "small danger", "deld:" + d.id) : null),
       h("details", { class: "src", open: S.open.has(key) ? true : null, ontoggle: e => { if (e.target.open) S.open.add(key); else S.open.delete(key); saveOpen(); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
         h("summary", { text: S.open.has(key) ? "내용 (누르면 접힘)" : "내용 · " + cut((String(d.body || "").split("\n").find(x => x.trim()) || "비어 있음").trim(), 90) }), foldText(path, "body", d.body, "자료: " + d.title, "본문")));
@@ -595,7 +604,7 @@ function buildMarkdown(withDocs) {
   if (pins.length) { L.push("\n## 결정 사항"); for (const m of pins) L.push(`- ${m.name} (${fmt(m.at)}): ${m.text.replace(/\n/g, " ")}`); }
   const ms = msMarkdownSummary();
   if (ms) L.push("\n" + ms);
-  if (withDocs) { L.push("\n## 메모·자료"); for (const d of S.docs) L.push(`\n### ${d.title}\n${d.body || ""}`); }
+  if (withDocs) { L.push("\n## 메모·자료"); for (const d of S.docs.filter(x => !x.archived)) L.push(`\n### ${d.title}\n${d.body || ""}`); }
   return L.join("\n");
 }
 function exportAll() {

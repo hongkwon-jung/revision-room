@@ -1,9 +1,9 @@
 // 원고 검토 → Word 내보내기
 // 원본 docx를 그대로 두고, 표시(메모)는 Word 메모로, 수정 제안은 Word 변경 추적(w:ins/w:del)으로만 끼워 넣는다.
-import { S, h, toast, tsDate, cut, modal, itemById, codeText, errMsg } from "./core.js?v=13";
-import { parseMarkup, plainOf, diffMarkup, textToTable } from "./markup.js?v=13";
-import { M, loadManuscript } from "./ms.js?v=13";
-import { downloadBlob } from "./files.js?v=13";
+import { S, h, toast, tsDate, cut, modal, itemById, codeText, errMsg } from "./core.js?v=14";
+import { parseMarkup, plainOf, diffMarkup, textToTable } from "./markup.js?v=14";
+import { M, loadManuscript } from "./ms.js?v=14";
+import { downloadBlob } from "./files.js?v=14";
 
 const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const A = "http://schemas.openxmlformats.org/drawingml/2006/main";
