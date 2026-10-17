@@ -126,3 +126,16 @@ export function tableToText(rows) {
 export function textToTable(s) {
   return String(s || "").split("\n").filter(l => l.trim() !== "").map(l => l.split(" | ").map(c => ({ t: c.replace(/ ¶ /g, "\n") })));
 }
+// 텍스트로 받은 표의 칸 배치. 첫 칸만 채운 행(묶음 행)은 표 전체 폭 한 칸으로 합치고, 칸이 모자란 행은 빈 칸으로 채운다.
+// 머리글 행(첫 행)과 이미 병합 정보(cs, rs)가 있는 행은 그대로 둔다.
+export function layoutTable(rows) {
+  const width = r => r.reduce((n, c) => n + (c.cs > 1 ? c.cs : 1), 0);
+  const ncols = rows.reduce((m, r) => Math.max(m, width(r)), 0);
+  return rows.map((r, i) => {
+    const spanned = r.some(c => c.cs > 1 || c.rs > 1);
+    if (i > 0 && ncols > 1 && !spanned && r.length && String(r[0].t || "").trim() && r.slice(1).every(c => !String(c.t || "").trim()))
+      return [{ ...r[0], cs: ncols, group: true }];
+    const w = width(r);
+    return !spanned && w < ncols ? [...r, ...Array.from({ length: ncols - w }, () => ({ t: "" }))] : r;
+  });
+}

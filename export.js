@@ -1,9 +1,9 @@
 // 원고 검토 → Word 내보내기
 // 원본 docx를 그대로 두고, 표시(메모)는 Word 메모로, 수정 제안은 Word 변경 추적(w:ins/w:del)으로만 끼워 넣는다.
-import { S, h, toast, tsDate, cut, modal, itemById, codeText, errMsg } from "./core.js?v=14";
-import { parseMarkup, plainOf, diffMarkup, textToTable } from "./markup.js?v=14";
-import { M, loadManuscript } from "./ms.js?v=14";
-import { downloadBlob } from "./files.js?v=14";
+import { S, h, toast, tsDate, cut, modal, itemById, codeText, errMsg } from "./core.js?v=15";
+import { parseMarkup, plainOf, diffMarkup, textToTable, layoutTable } from "./markup.js?v=15";
+import { M, loadManuscript } from "./ms.js?v=15";
+import { downloadBlob } from "./files.js?v=15";
 
 const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const A = "http://schemas.openxmlformats.org/drawingml/2006/main";
@@ -366,6 +366,104 @@ function cellGrid(tbl) {
   return rows;
 }
 
+// 기준 표의 행 tr에서 열 col을 덮는 칸 tc
+function cellAtCol(tr, col) {
+  if (!tr) return null;
+  let at = 0, last = null;
+  for (const tc of wkids(tr, "tc")) {
+    const tcpr = wkids(tc, "tcPr")[0];
+    const gs = tcpr && wkids(tcpr, "gridSpan")[0];
+    const span = gs ? parseInt(wattr(gs, "val"), 10) || 1 : 1;
+    if (col < at + span) return tc;
+    at += span; last = tc;
+  }
+  return last;
+}
+const TCPR_HEAD = ["cnfStyle"];
+// 웹 표(행 배열)를 Word 표로 만든다. 서식(표 속성, 머리글·본문 칸, 글자)은 기준 표 tplTbl을 따르고, 모든 행·글자를 변경 추적 삽입으로 표시한다.
+function buildTrackedTable(doc, rows, tplTbl, attrsFn) {
+  rows = layoutTable(rows);
+  const ncols = rows.reduce((m, r) => Math.max(m, r.reduce((n, c) => n + (c.cs > 1 ? c.cs : 1), 0)), 0);
+  const tbl = wel(doc, "tbl");
+  const tplPr = tplTbl && wkids(tplTbl, "tblPr")[0];
+  const tblPr = tplPr ? tplPr.cloneNode(true) : wel(doc, "tblPr");
+  for (const e of [...wkids(tblPr, "tblPrChange"), ...wkids(tblPr, "tblCaption"), ...wkids(tblPr, "tblDescription")]) tblPr.removeChild(e);
+  tbl.appendChild(tblPr);
+  const tplGrid = tplTbl && wkids(tplTbl, "tblGrid")[0];
+  const tplCols = tplGrid ? wkids(tplGrid, "gridCol").map(c => parseInt(wattr(c, "w"), 10) || 0) : [];
+  const total = tplCols.reduce((a, b) => a + b, 0) || 9360;
+  const colW = tplCols.length === ncols ? tplCols : Array.from({ length: ncols }, () => Math.floor(total / ncols));
+  const grid = wel(doc, "tblGrid");
+  for (const w of colW) grid.appendChild(wel(doc, "gridCol", { w }));
+  tbl.appendChild(grid);
+  const tplRows = tplTbl ? wkids(tplTbl, "tr") : [];
+  const tplHead = tplRows[0] || null, tplBody = tplRows[1] || tplRows[0] || null;
+  rows.forEach((r, ri) => {
+    const ttr = ri === 0 ? tplHead : tplBody;
+    const tr = wel(doc, "tr");
+    const ttrPr = ttr && wkids(ttr, "trPr")[0];
+    const trPr = ttrPr ? ttrPr.cloneNode(true) : wel(doc, "trPr");
+    for (const e of [...wkids(trPr, "ins"), ...wkids(trPr, "del"), ...wkids(trPr, "trPrChange"), ...wkids(trPr, "trHeight")]) trPr.removeChild(e);
+    trPr.appendChild(wel(doc, "ins", attrsFn()));
+    tr.appendChild(trPr);
+    let col = 0;
+    for (const c of r) {
+      const span = c.cs > 1 ? c.cs : 1;
+      const ttc = cellAtCol(ttr, col);
+      const tc = wel(doc, "tc");
+      const ttcPr = ttc && wkids(ttc, "tcPr")[0];
+      const tcPr = ttcPr ? ttcPr.cloneNode(true) : wel(doc, "tcPr");
+      for (const name of ["tcW", "gridSpan", "hMerge", "vMerge", "cellIns", "cellDel", "cellMerge", "tcPrChange"]) for (const e of wkids(tcPr, name)) tcPr.removeChild(e);
+      if (span > 1) {
+        // 합친 칸의 오른쪽 테두리는 끝 열 칸의 것을 쓴다
+        const endTc = cellAtCol(ttr, col + span - 1);
+        const endPr = endTc ? wkids(endTc, "tcPr")[0] : null;
+        const eb = endPr && wkids(endPr, "tcBorders")[0], mb = wkids(tcPr, "tcBorders")[0];
+        if (eb && mb) for (const side of ["right", "end"]) {
+          const src = wkids(eb, side)[0];
+          for (const e of wkids(mb, side)) mb.removeChild(e);
+          if (src) { const after = [...mb.childNodes].find(x => x.nodeType === 1 && ["bottom", "insideH", "insideV", "tl2br", "tr2bl"].includes(x.localName)); mb.insertBefore(src.cloneNode(true), after || null); }
+        }
+      }
+      const head = [...tcPr.childNodes].filter(x => x.nodeType === 1 && TCPR_HEAD.includes(x.localName)).pop();
+      const tcW = wel(doc, "tcW", { w: colW.slice(col, col + span).reduce((a, b) => a + b, 0), type: "dxa" });
+      tcPr.insertBefore(tcW, head ? head.nextSibling : tcPr.firstChild);
+      if (span > 1) tcPr.insertBefore(wel(doc, "gridSpan", { val: span }), tcW.nextSibling);
+      tc.appendChild(tcPr);
+      const tp = ttc ? wkids(ttc, "p")[0] : null;
+      const tpl = tp ? templateRPr(tp) : null;
+      for (const line of String(c.t || "").split("\n")) {
+        const p = wel(doc, "p");
+        const tppr = tp && wkids(tp, "pPr")[0];
+        if (tppr) {
+          const ppr = tppr.cloneNode(true);
+          for (const e of [...wkids(ppr, "sectPr"), ...wkids(ppr, "pPrChange"), ...wkids(ppr, "rPr")]) ppr.removeChild(e);
+          p.appendChild(ppr);
+        }
+        markParaMark(doc, p, "ins", attrsFn());
+        for (const run of parseMarkup(line)) {
+          const ins = wel(doc, "ins", attrsFn());
+          ins.appendChild(buildRuns(doc, run.t, run.f, tpl, ri === 0));
+          p.appendChild(ins);
+        }
+        tc.appendChild(p);
+      }
+      tr.appendChild(tc);
+      col += span;
+    }
+    tbl.appendChild(tr);
+  });
+  return tbl;
+}
+// 표 둘이 바로 붙으면 Word가 한 표로 이어 붙이므로 사이에 빈 문단(변경 추적 삽입)을 둔다
+function separatorPara(doc, attrsFn) {
+  const p = wel(doc, "p");
+  markParaMark(doc, p, "ins", attrsFn());
+  return p;
+}
+const firstPara = tbl => tbl.getElementsByTagNameNS(W, "p")[0];
+const lastPara = tbl => { const ps = tbl.getElementsByTagNameNS(W, "p"); return ps[ps.length - 1]; };
+
 /* ---------- 본체 ---------- */
 export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
   if (!window.JSZip) await loadJSZip();
@@ -394,7 +492,7 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
 
   progress("원고와 원본 대조 중");
   const mapped = mapBlocks(xml, styleNames, defaultStyle);
-  const report = { blocks: mapped.length, expected: M.blocks.length, mismatch: [], comments: 0, replies: 0, ins: 0, del: 0, paraDel: 0, paraIns: 0, fallback: [], skipped: [] };
+  const report = { blocks: mapped.length, expected: M.blocks.length, mismatch: [], comments: 0, replies: 0, ins: 0, del: 0, paraDel: 0, paraIns: 0, fallback: [], skipped: [], tblIns: 0, tblRep: 0 };
   const byBid = new Map();
   const n = Math.min(mapped.length, M.blocks.length);
   for (let i = 0; i < n; i++) {
@@ -448,8 +546,14 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
   }
   for (const list of insByAnchor.values()) list.sort((a, b) => (a.order || 0) - (b.order || 0));
   const firstOfType = t => { const b = M.blocks.find(x => x.type === t); return b ? byBid.get(b.id) : null; };
+  const firstTable = (() => { const b = M.blocks.find(x => x.type === "table"); const m = b && byBid.get(b.id); return m && m.kind === "table" ? m.el : null; })();
   const buildInsertedPara = rv => {
     const btype = rv.btype || "p";
+    if (btype === "table") {
+      const attrs = () => ({ id: nextRid++, author: rv.author || "?", date: isoDate(rv.updatedAt) });
+      report.tblIns++;
+      return buildTrackedTable(xml, textToTable(rv.text), firstTable, attrs);
+    }
     const tplBlock = (btype === "table" ? firstOfType("p") : firstOfType(btype)) || firstOfType("p");
     const tplP = tplBlock.el;
     const p = wel(xml, "p");
@@ -463,21 +567,24 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
     markParaMark(xml, p, "ins", attrs());
     const tpl = templateRPr(tplP);
     const heading = tplBlock.heading;
-    const text = btype === "table" ? String(rv.text || "") : String(rv.text || "");
+    const text = String(rv.text || "");
     for (const run of parseMarkup(text)) {
       const ins = wel(xml, "ins", attrs());
       ins.appendChild(buildRuns(xml, run.t, run.f, tpl, heading));
       p.appendChild(ins);
     }
     report.paraIns++;
-    if (btype === "table") report.fallback.push({ bid: rv.id, why: "새 표는 표 서식 없이 텍스트로 넣고 메모로 알림" });
     return p;
   };
   const placeChain = (node, bid, depth) => {
     for (const rv of insByAnchor.get(bid) || []) {
       const p = buildInsertedPara(rv);
+      const isTbl = isW(p, "tbl");
+      const sepAttrs = () => ({ id: nextRid++, author: rv.author || "?", date: isoDate(rv.updatedAt) });
+      if (isTbl && isW(node, "tbl")) { const sp = separatorPara(xml, sepAttrs); node.parentNode.insertBefore(sp, node.nextSibling); node = sp; }
       node.parentNode.insertBefore(p, node.nextSibling);
-      insertedEl.set(rv.id, { el: p, rev: rv });
+      if (isTbl && isW(p.nextSibling, "tbl")) p.parentNode.insertBefore(separatorPara(xml, sepAttrs), p.nextSibling);
+      insertedEl.set(rv.id, isTbl ? { el: firstPara(p), last: lastPara(p), tbl: p, rev: rv } : { el: p, rev: rv });
       node = p;
       if (depth < 50) node = placeChain(node, rv.id, depth + 1);
     }
@@ -550,6 +657,10 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
     const m = byBid.get(bid);
     const insd = insertedEl.get(bid);
     if (!m && !insd) { for (const a of list) report.skipped.push({ bid, why: "원고에서 위치를 찾지 못함 (" + cut(a.text, 30) + ")" }); continue; }
+    if (insd && insd.tbl) {
+      for (const g of groupsOf(list.map(a => ({ ...a, whole: true })))) { const ids = commentsForGroup(g); anchorCommentsSpan(insd.el, insd.last, ids, commentRefStyle); }
+      continue;
+    }
     if (insd) {
       const p = insd.el;
       const cutsI = [];
@@ -628,7 +739,8 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
       }
       const newRows = textToTable(rv.text);
       const oldRows = m.b.rows;
-      const same = oldRows.length === newRows.length && oldRows.every((r, i) => r.length === newRows[i].length) && grid.length >= oldRows.length;
+      const same = oldRows.length === newRows.length && oldRows.every((r, i) => r.length === newRows[i].length) && grid.length >= oldRows.length
+        && oldRows.every((r, i) => grid[i] && grid[i].cells.length === r.length);
       let applied = same;
       if (same) {
         for (let i = 0; i < oldRows.length && applied; i++) {
@@ -671,10 +783,22 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
         }
       }
       if (!applied) {
-        const c = addComment(rv.author, isoDate(rv.updatedAt), ["[표 수정 제안 · 표 구조가 바뀌어 원본 표는 그대로 두고 수정안을 메모로 첨부]", ...plainOf(rv.text || "").split("\n")], null, false);
-        anchorCommentsSpan(ps[0], ps[ps.length - 1], [c.id], commentRefStyle);
-        report.comments++;
-        report.fallback.push({ bid: rv.id, why: "표 구조 변경: 수정안을 메모로 첨부" });
+        // 표 구조가 바뀐 수정: 원본 표를 변경 추적으로 지우고, 같은 서식의 새 표를 바로 뒤에 변경 추적 삽입으로 넣는다
+        // 새 표를 먼저 만든다 (원본 글자를 지운 뒤에는 글자 서식을 가져올 수 없다)
+        const nt = buildTrackedTable(xml, newRows, m.el, attrsFn);
+        for (const row of grid) {
+          let trpr = wkids(row.tr, "trPr")[0];
+          if (!trpr) { trpr = wel(xml, "trPr"); const tblPrEx = wkids(row.tr, "tblPrEx")[0]; row.tr.insertBefore(trpr, tblPrEx ? tblPrEx.nextSibling : row.tr.firstChild); }
+          trpr.appendChild(wel(xml, "del", attrsFn()));
+        }
+        for (const p of ps) deleteParagraph(p, attrsFn);
+        const sep = separatorPara(xml, attrsFn);
+        m.el.parentNode.insertBefore(sep, m.el.nextSibling);
+        sep.parentNode.insertBefore(nt, sep.nextSibling);
+        if (isW(nt.nextSibling, "tbl")) nt.parentNode.insertBefore(separatorPara(xml, attrsFn), nt.nextSibling);
+        report.tblRep++;
+        noteComment(rv, firstPara(nt));
+        continue;
       }
       if (ps.length) noteComment(rv, ps[0]);
       continue;
@@ -682,12 +806,6 @@ export async function buildAnnotatedDocx(fileData, opts, progress = () => {}) {
     report.skipped.push({ bid: rv.id, why: "그림 수정은 지원하지 않음" });
   }
 
-  // 새 표 제안 알림 메모
-  for (const [bid, e] of insertedEl) if ((e.rev.btype || "p") === "table") {
-    const c = addComment(e.rev.author, isoDate(e.rev.updatedAt), ["[새 표 제안] 웹에서 추가한 표입니다. 칸 구분은 \" | \"이며, Word에서 표로 바꿔야 합니다."], null, false);
-    anchorComments(e.el, 0, 0, [c.id], commentRefStyle, true);
-    report.comments++;
-  }
 
   progress("파일 쓰는 중");
   // document.xml
@@ -811,7 +929,7 @@ export function openExportDialog() {
       const a = h("a", { href: url, download: fname, class: "btn primary", text: `${fname} 내려받기 (${(blob.size / 1048576).toFixed(1)} MB)` });
       status.textContent = `완료 (${((Date.now() - t0) / 1000).toFixed(1)}초)`;
       const lines = [
-        `메모 ${report.comments}건 (답글 ${report.replies}건 별도), 변경 추적: 삽입 ${report.ins}곳 · 삭제 ${report.del}곳 · 새 문단 ${report.paraIns}개 · 문단 삭제 ${report.paraDel}개`,
+        `메모 ${report.comments}건 (답글 ${report.replies}건 별도), 변경 추적: 삽입 ${report.ins}곳 · 삭제 ${report.del}곳 · 새 문단 ${report.paraIns}개 · 문단 삭제 ${report.paraDel}개 · 새 표 ${report.tblIns}개 · 구조 바뀐 표 교체 ${report.tblRep}개`,
         `원본 대조: 문단 ${report.blocks}개 중 글자 불일치 ${report.mismatch.length}개${report.mismatch.length ? " (" + report.mismatch.slice(0, 8).join(", ") + ")" : ""}`
       ];
       result.append(h("div", null, a), ...lines.map(t => h("div", { class: "muted", text: t })));

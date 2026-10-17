@@ -2,9 +2,9 @@ import {
   S, h, db, toast, fmt, tsMs, errMsg, myName, writeLog, scheduleRender, confirmButton, keyed, sigOf, patchChildren,
   itemLabel, itemById, itemFull, codeText, lsGet, lsSet, colorFor, cut, copyText, modal, editArea, autosize, restoreFocus,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where, serverTimestamp, writeBatch, arrayUnion
-} from "./core.js?v=14";
-import { parseMarkup, plainOf, diffMarkup, originalPieces, insertedPieces, fmtNode, markupNodes, tableToText, textToTable } from "./markup.js?v=14";
-import { getFileURL, fileByPath } from "./files.js?v=14";
+} from "./core.js?v=15";
+import { parseMarkup, plainOf, diffMarkup, originalPieces, insertedPieces, fmtNode, markupNodes, tableToText, textToTable, layoutTable } from "./markup.js?v=15";
+import { getFileURL, fileByPath } from "./files.js?v=15";
 
 export const M = {
   blocks: [], byId: new Map(), plain: new Map(), loaded: false, loading: false, error: "",
@@ -211,7 +211,7 @@ function blockContent(entry, revs) {
     const pieces = view === "final" ? parseMarkup(r.text).map(x => ({ kind: "eq", t: x.t, f: x.f, o: null })) : insertedPieces(r.text);
     if (r.status === "거절") wrap.classList.add("rejected");
     if (r.btype === "table") {
-      wrap.append(renderTable(textToTable(r.text), (td, c) => { td.className = view === "final" ? "" : "ins"; td.append(markupNodes(c.t)); }));
+      wrap.append(renderTable(layoutTable(textToTable(r.text)), (td, c) => { td.className = view === "final" ? "" : "ins"; td.append(markupNodes(c.t)); }));
     } else renderPieces(wrap, pieces, annsFor(r.id));
     return wrap;
   }
@@ -238,7 +238,7 @@ function blockContent(entry, revs) {
     if (active && rev.text !== undefined) {
       const newRows = textToTable(rev.text);
       if (view === "final") {
-        const rows = tableShapeSame(b.rows, newRows) ? b.rows.map((r, i) => r.map((c, j) => ({ ...c, t: newRows[i][j].t }))) : newRows;
+        const rows = tableShapeSame(b.rows, newRows) ? b.rows.map((r, i) => r.map((c, j) => ({ ...c, t: newRows[i][j].t }))) : layoutTable(newRows);
         wrap.append(renderTable(rows, (td, c) => td.append(markupNodes(c.t))));
       } else if (tableShapeSame(b.rows, newRows)) {
         wrap.append(renderTable(b.rows, (td, c, i, j) => {
@@ -248,7 +248,7 @@ function blockContent(entry, revs) {
         }));
       } else {
         wrap.append(h("div", { class: "tbl-old" }, renderTable(b.rows, (td, c) => { td.className = "del"; td.append(markupNodes(c.t)); })));
-        wrap.append(h("div", { class: "tbl-new" }, renderTable(newRows, (td, c) => { td.className = "ins"; td.append(markupNodes(c.t)); })));
+        wrap.append(h("div", { class: "tbl-new" }, renderTable(layoutTable(newRows), (td, c) => { td.className = "ins"; td.append(markupNodes(c.t)); })));
       }
       if (rev.del && view !== "final") wrap.classList.add("deleted");
       if (rev.del && view === "final") wrap.classList.add("hidden");
@@ -498,7 +498,7 @@ function toolbar() {
   const exp = h("div", { class: "exports" },
     h("button", { class: "small", text: "최종본 텍스트 복사", onclick: () => copyText(finalText()) }),
     h("button", { class: "small", text: "수정·표시 목록 복사", onclick: () => copyText(changeList()) }),
-    h("button", { class: "small", text: "Word로 내보내기", title: "제출본 docx에 표시를 Word 메모로, 수정을 변경 추적으로 넣어 내려받기", onclick: () => import("./export.js?v=14").then(m => m.openExportDialog()).catch(e => toast("열지 못했습니다: " + errMsg(e))) }),
+    h("button", { class: "small", text: "Word로 내보내기", title: "제출본 docx에 표시를 Word 메모로, 수정을 변경 추적으로 넣어 내려받기", onclick: () => import("./export.js?v=15").then(m => m.openExportDialog()).catch(e => toast("열지 못했습니다: " + errMsg(e))) }),
     h("button", { class: "small", text: "사용법", onclick: showHelp }));
   return h("div", { class: "ms-bar" }, h("div", { class: "ms-bar-row" }, h("span", { class: "muted", text: "보기" }), seg, search, h("span", { class: "grow" }), exp),
     h("div", { class: "ms-bar-row" }, ownerSel, toggles, legend, h("span", { class: "grow" }), stats));
@@ -719,10 +719,10 @@ function openEditor(target) {
     if (isTable) {
       const oldRows = kind === "insert" ? [] : textToTable(base), newRows = textToTable(ta.value);
       if (kind !== "insert" && tableShapeSame(oldRows, newRows)) {
-        prev.append(renderTable(oldRows, (td, c, i, j) => { const nt = newRows[i][j].t; if (nt === c.t) td.append(markupNodes(c.t)); else renderPieces(td, diffMarkup(c.t, nt).map(p => ({ ...p, o: null })), []); }));
+        prev.append(renderTable(layoutTable(oldRows), (td, c, i, j) => { const nt = (newRows[i][j] || c).t; if (nt === c.t) td.append(markupNodes(c.t)); else renderPieces(td, diffMarkup(c.t, nt).map(p => ({ ...p, o: null })), []); }));
       } else {
         if (oldRows.length) prev.append(h("div", { class: "meta", text: "표 구조가 바뀌어 전체를 새 표로 표시합니다." }));
-        prev.append(renderTable(newRows, (td, c) => { td.className = "ins"; td.append(markupNodes(c.t)); }));
+        prev.append(renderTable(layoutTable(newRows), (td, c) => { td.className = "ins"; td.append(markupNodes(c.t)); }));
       }
     } else renderPieces(prev, kind === "insert" ? insertedPieces(ta.value) : diffMarkup(base, ta.value).map(p => ({ ...p, o: null })), []);
   };
