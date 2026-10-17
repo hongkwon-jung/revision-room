@@ -2,9 +2,9 @@ import {
   S, h, db, toast, fmt, tsMs, errMsg, myName, writeLog, scheduleRender, confirmButton, keyed, sigOf, patchChildren,
   itemLabel, itemById, itemFull, codeText, lsGet, lsSet, colorFor, cut, copyText, modal, editArea, autosize, restoreFocus,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where, serverTimestamp, writeBatch, arrayUnion
-} from "./core.js?v=10";
-import { parseMarkup, plainOf, diffMarkup, originalPieces, insertedPieces, fmtNode, markupNodes, tableToText, textToTable } from "./markup.js?v=10";
-import { getFileURL, fileByPath } from "./files.js?v=10";
+} from "./core.js?v=11";
+import { parseMarkup, plainOf, diffMarkup, originalPieces, insertedPieces, fmtNode, markupNodes, tableToText, textToTable } from "./markup.js?v=11";
+import { getFileURL, fileByPath } from "./files.js?v=11";
 
 export const M = {
   blocks: [], byId: new Map(), plain: new Map(), loaded: false, loading: false, error: "",
@@ -16,7 +16,8 @@ export const M = {
   side: lsGet("msSide") || "toc",
   sideFilter: { type: "", item: "", state: "open" },
   q: "", hits: [], hitIdx: -1,
-  pendingScroll: null, activeAnn: null, editor: null, popover: null
+  pendingScroll: null, activeAnn: null, editor: null, popover: null,
+  owner: lsGet("msOwner") || "", pendingFocus: null
 };
 const TYPE_LABEL = { memo: "메모", reviewer: "리뷰어 지적", issue: "문제", bookmark: "책갈피" };
 const TYPE_RANK = { bookmark: 0, reviewer: 1, issue: 2, memo: 3 };
@@ -65,8 +66,41 @@ window.__importManuscript = importManuscript;
 
 /* ---------- 데이터 정리 ---------- */
 const revMap = () => { const m = new Map(); for (const r of S.revs) m.set(r.id, r); return m; };
+// v11: 담당자 필터, 작성자(Claude) 구분, 사람이 읽는 위치 이름
+export function ownerOfAnn(a) { const it = a && a.itemId ? itemById(a.itemId) : null; return it && it.owner && it.owner !== "미정" ? it.owner : ""; }
+function ownerOk(a) { return !M.owner || (M.owner === "__none" ? !ownerOfAnn(a) : ownerOfAnn(a) === M.owner); }
+export function isClaude(a) { return !!a && (a.by === "Claude" || typeof a.createdAt === "number"); }
+export function ownerList() { return [...new Set(S.items.map(i => i.owner).filter(o => o && o !== "미정"))].sort(); }
+let locCache = { n: -1, map: new Map() };
+function secCode(sec) {
+  if (!sec) return "";
+  return sec.split(">").map(x => { const m = x.trim().match(/^([IVX]+|[A-Z]|\d+)\./); return m ? m[1] : ""; }).filter(Boolean).join(".");
+}
+function buildLoc() {
+  if (locCache.n === M.blocks.length) return locCache.map;
+  const map = new Map(); const cnt = new Map(); let lastCap = "";
+  for (const b of M.blocks) {
+    const code = secCode(b.sec) || (b.sec ? cut(b.sec, 20) : "");
+    if (b.type === "caption") { const m = plainOf(b.t || "").match(/^(FIG\. ?\d+|TABLE [IVX]+)/); lastCap = m ? m[1] : "캡션"; map.set(b.id, `${code ? code + " · " : ""}${lastCap} 캡션`); continue; }
+    if (b.type === "table") { map.set(b.id, `${code ? code + " · " : ""}${lastCap || "표"} 표 안`); continue; }
+    if (b.type === "fig") { map.set(b.id, `FIG. ${b.n} 그림`); continue; }
+    if (/^h[123]$/.test(b.type)) { map.set(b.id, `${code || "제목"} 제목`); continue; }
+    if (b.type === "p") { const k = b.sec || ""; const n = (cnt.get(k) || 0) + 1; cnt.set(k, n); map.set(b.id, `${code || "본문"} ${n}번째 문단`); continue; }
+    map.set(b.id, code || b.type);
+  }
+  locCache = { n: M.blocks.length, map };
+  return map;
+}
+export function locLabel(bid) {
+  const m = buildLoc();
+  if (m.has(bid)) return m.get(bid);
+  const r = S.revs.find(x => x.id === bid);
+  if (r) return "새 문단 (" + (m.get(r.insertAfter) || "추가 문단") + " 뒤)";
+  return "(위치 없음)";
+}
+export function annLoc(a) { return locLabel(a.bid) + (a.whole ? " 전체" : ""); }
 function annsFor(bid) {
-  return S.anns.filter(a => a.bid === bid && M.show[a.type] !== false && !(M.hideResolved && a.resolved));
+  return S.anns.filter(a => a.bid === bid && M.show[a.type] !== false && !(M.hideResolved && a.resolved) && ownerOk(a));
 }
 function lockFor(bid) {
   const l = S.locks.find(x => x.id === bid);
@@ -289,6 +323,7 @@ function annCard(a) {
       h("div", { class: "mc-head" },
         h("span", { class: "chip t-" + a.type, text: TYPE_LABEL[a.type] + (a.whole ? " (문단)" : "") }),
         a.itemId ? h("span", { class: "chip item", text: itemTag(itemById(a.itemId)) }) : null,
+        isClaude(a) ? h("span", { class: "chip by-claude", text: "Claude" }) : null,
         nrep ? h("span", { class: "meta", text: `답글 ${nrep}` }) : null,
         h("span", { class: "mc-caret", text: "▸" })),
       h("div", { class: "mc-sum", text: cut(first, 110) }));
@@ -308,9 +343,12 @@ function annCard(a) {
   return h("div", { class: cls, dataset: { ann: a.id }, onclick: e => { if (e.target.closest("button,input,textarea,select")) return; activate(a.id, false); } },
     h("div", { class: "mc-head" },
       h("span", { class: "chip t-" + a.type, text: TYPE_LABEL[a.type] + (a.whole ? " (문단 전체)" : "") }),
-      a.itemId ? h("span", { class: "chip item", text: itemShortName(itemById(a.itemId)) }) : null,
-      h("span", { class: "meta", text: `${a.name || ""} · ${fmt(a.createdAt)}` })),
-    a.quote && !a.whole ? h("div", { class: "mc-quote", text: "“" + cut(a.quote, 120) + "”" }) : null,
+      a.itemId ? h("span", { class: "chip item", title: itemShortName(itemById(a.itemId)), text: itemTag(itemById(a.itemId)) }) : null,
+      isClaude(a) ? h("span", { class: "chip by-claude", title: "Claude가 작성한 표시입니다", text: "Claude 작성" }) : null,
+      a.editedBy === "Claude" && !isClaude(a) ? h("span", { class: "chip by-claude", text: "Claude 수정" }) : null,
+      h("span", { class: "meta", text: (isClaude(a) ? "" : (a.name || "") + " · ") + fmt(a.createdAt) })),
+    h("div", { class: "mc-loc", text: "위치: " + annLoc(a) }),
+    a.quote && !a.whole ? h("div", { class: "mc-quote", text: "범위: “" + cut(a.quote, 160) + "”" }) : null,
     editArea("anns/" + a.id, "text", a.text, TYPE_LABEL[a.type], "내용", { placeholder: a.type === "bookmark" ? "책갈피 이름" : "내용", cls: "mc-ta" }),
     (a.replies || []).length ? h("div", { class: "replies" }, a.replies.map(r => h("div", { class: "reply" }, h("b", { text: r.n }), " ", h("span", { class: "meta", text: fmt(new Date(r.at)) }), h("div", { text: r.t })))) : null,
     h("div", { class: "mc-actions" }, input,
@@ -327,9 +365,9 @@ function annCard(a) {
 function rowFor(entry, revs) {
   const bid = entry.id;
   const rev = entry.inserted ? entry.rev : entry.rev;
-  const anns = S.anns.filter(a => a.bid === bid && M.show[a.type] !== false).sort((x, y) => ((x.whole ? -1 : x.start) - (y.whole ? -1 : y.start)) || annOrder(x, y));
+  const anns = S.anns.filter(a => a.bid === bid && M.show[a.type] !== false && ownerOk(a)).sort((x, y) => ((x.whole ? -1 : x.start) - (y.whole ? -1 : y.start)) || annOrder(x, y));
   const lock = lockFor(bid);
-  const sig = sigOf([bid, M.view, M.show, M.hideResolved, M.expandAll, anns.map(a => M.openCards.has(a.id)), M.activeAnn && anns.some(a => a.id === M.activeAnn) ? M.activeAnn : 0,
+  const sig = sigOf([bid, M.view, M.show, M.hideResolved, M.expandAll, M.owner, anns.map(a => M.openCards.has(a.id)), M.activeAnn && anns.some(a => a.id === M.activeAnn) ? M.activeAnn : 0,
     rev ? [rev.text, rev.status, rev.del, rev.items, rev.note, rev.author, rev.updatedAt, rev.decidedBy] : 0,
     anns.map(a => [a.id, a.start, a.end, a.type, a.text, a.resolved, (a.replies || []).length, a.itemId, S.dirty["reply#" + a.id] !== undefined, S.armed["da:" + a.id] > Date.now()]),
     lock ? lock.name : 0, S.armed["rv:" + bid] > Date.now(),
@@ -384,6 +422,7 @@ function sideAnns(onlyBookmarks) {
     if (f.state === "open") list = list.filter(a => !a.resolved);
     if (f.state === "resolved") list = list.filter(a => a.resolved);
   }
+  list = list.filter(ownerOk);
   const order = new Map(M.blocks.map((b, i) => [b.id, i]));
   list.sort((a, b) => ((order.get(a.bid) ?? 1e9) - (order.get(b.bid) ?? 1e9)) || ((a.whole ? -1 : a.start) - (b.whole ? -1 : b.start)) || annOrder(a, b));
   const out = [];
@@ -399,10 +438,11 @@ function sideAnns(onlyBookmarks) {
         [["open", "미해결만"], ["resolved", "해결됨만"], ["all", "전체"]].map(([v, l]) => h("option", { value: v, text: l, selected: f.state === v ? true : null })))));
   }
   if (!list.length) out.push(h("div", { class: "muted pad", text: onlyBookmarks ? "책갈피가 없습니다. 원고에서 글을 선택하거나 문단의 책갈피 버튼을 누르세요." : "표시가 없습니다." }));
-  for (const a of list) out.push(h("div", { class: "side-item a-" + a.type + (a.resolved ? " resolved" : ""), onclick: () => { scrollToBlock(a.bid); activate(a.id, true); } },
-    h("div", null, h("span", { class: "chip t-" + a.type, text: TYPE_LABEL[a.type] }), a.itemId ? h("span", { class: "chip item", text: itemShortName(itemById(a.itemId)) }) : null),
-    h("div", { class: "si-t", text: a.type === "bookmark" ? (a.text || cut(a.quote, 60)) : cut(a.text || a.quote, 90) }),
-    h("div", { class: "meta", text: `${a.name || ""} · ${cut(blockLabel(a.bid), 40)}` })));
+  for (const a of list) out.push(h("div", { class: "side-item a-" + a.type + (a.resolved ? " resolved" : "") + (M.activeAnn === a.id ? " on" : ""), onclick: () => focusAnn(a.id) },
+    h("div", null, h("span", { class: "chip t-" + a.type, text: TYPE_LABEL[a.type] }), a.itemId ? h("span", { class: "chip item", title: itemShortName(itemById(a.itemId)), text: itemTag(itemById(a.itemId)) }) : null,
+      isClaude(a) ? h("span", { class: "chip by-claude", text: "Claude" }) : null),
+    h("div", { class: "si-loc", text: annLoc(a) }),
+    h("div", { class: "si-t", text: a.type === "bookmark" ? (a.text || cut(a.quote, 60)) : cut(String(a.text || a.quote || "").split("\n")[0], 90) })));
   return out;
 }
 function sideRevs() {
@@ -442,13 +482,26 @@ function toolbar() {
     h("button", { class: "small", text: "다음", onclick: () => stepHit(1) }),
     h("span", { class: "meta hitcount", text: M.q ? `${M.hits.length ? M.hitIdx + 1 : 0}/${M.hits.length}` : "" }));
   const stats = h("div", { class: "meta", text: `수정 ${revs.length}건 (제안 ${cnt.제안} · 수락 ${cnt.수락} · 거절 ${cnt.거절}) · 열린 표시 ${openAnns}건` });
+  const me = myName();
+  const ownerSel = h("label", { class: "owner-pick" }, h("span", { text: "담당" }),
+    h("select", { onchange: e => { M.owner = e.target.value; lsSet("msOwner", M.owner); scheduleRender(); } },
+      h("option", { value: "", text: "모든 담당", selected: !M.owner ? true : null }),
+      ownerList().map(o => h("option", { value: o, text: o + (o === me ? " (나)" : ""), selected: M.owner === o ? true : null })),
+      h("option", { value: "__none", text: "담당 없음", selected: M.owner === "__none" ? true : null })));
+  const legend = h("details", { class: "legend" }, h("summary", { text: "표시 종류" }),
+    h("div", { class: "legend-body" },
+      h("div", null, h("span", { class: "chip t-reviewer", text: "리뷰어 지적" }), " 심사위원이 문제 삼은 원고 문장"),
+      h("div", null, h("span", { class: "chip t-memo", text: "메모" }), " 그 자리에서 할 대응 계획"),
+      h("div", null, h("span", { class: "chip t-issue", text: "문제" }), " 원고의 오류나 확인이 필요한 곳"),
+      h("div", null, h("span", { class: "chip t-bookmark", text: "책갈피" }), " 발표·회의 때 찾아갈 위치"),
+      h("div", { class: "muted", text: "본문 색칠 = 표시가 달린 범위. 카드나 왼쪽 목록을 누르면 그 범위에 주황 테두리가 생깁니다." })));
   const exp = h("div", { class: "exports" },
     h("button", { class: "small", text: "최종본 텍스트 복사", onclick: () => copyText(finalText()) }),
     h("button", { class: "small", text: "수정·표시 목록 복사", onclick: () => copyText(changeList()) }),
-    h("button", { class: "small", text: "Word로 내보내기", title: "제출본 docx에 표시를 Word 메모로, 수정을 변경 추적으로 넣어 내려받기", onclick: () => import("./export.js?v=10").then(m => m.openExportDialog()).catch(e => toast("열지 못했습니다: " + errMsg(e))) }),
+    h("button", { class: "small", text: "Word로 내보내기", title: "제출본 docx에 표시를 Word 메모로, 수정을 변경 추적으로 넣어 내려받기", onclick: () => import("./export.js?v=11").then(m => m.openExportDialog()).catch(e => toast("열지 못했습니다: " + errMsg(e))) }),
     h("button", { class: "small", text: "사용법", onclick: showHelp }));
   return h("div", { class: "ms-bar" }, h("div", { class: "ms-bar-row" }, h("span", { class: "muted", text: "보기" }), seg, search, h("span", { class: "grow" }), exp),
-    h("div", { class: "ms-bar-row" }, toggles, h("span", { class: "grow" }), stats));
+    h("div", { class: "ms-bar-row" }, ownerSel, toggles, legend, h("span", { class: "grow" }), stats));
 }
 function showHelp() {
   modal("원고 검토 사용법", h("div", { class: "help" },
@@ -504,6 +557,33 @@ export function scrollToBlock(bid) {
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 function saveCards() { lsSet("msCards", JSON.stringify([...M.openCards].slice(-300))); }
+// v11: 표시 하나로 정확히 이동 (필터에 가려 있으면 풀고, 범위를 주황 테두리로 강조, 카드 펼침)
+export function focusAnn(annId) {
+  const a = S.anns.find(x => x.id === annId);
+  if (!a) { toast("표시를 찾지 못했습니다."); return; }
+  let freed = false;
+  if (M.show[a.type] === false) { M.show[a.type] = true; lsSet("msShow", JSON.stringify(M.show)); freed = true; }
+  if (M.hideResolved && a.resolved) { M.hideResolved = false; lsSet("msHideRes", "0"); freed = true; }
+  if (!ownerOk(a)) { M.owner = ""; lsSet("msOwner", ""); freed = true; }
+  if (freed) toast("이 표시가 보이도록 필터를 풀었습니다.");
+  M.activeAnn = annId; M.openCards.add(annId); saveCards();
+  M.pendingFocus = annId;
+  if (S.tab !== "ms") { S.tab = "ms"; lsSet("tab", "ms"); }
+  scheduleRender();
+}
+function doFocus(annId) {
+  const a = S.anns.find(x => x.id === annId);
+  if (!a) return;
+  const spans = [...document.querySelectorAll(`.pc[data-anns~="${CSS.escape(annId)}"]`)];
+  const row = document.getElementById("row-" + a.bid);
+  const target = spans[0] || row;
+  if (!target) { M.pendingFocus = annId; return; }
+  target.scrollIntoView({ block: "center" });
+  document.querySelectorAll(".focus-flash").forEach(e => e.classList.remove("focus-flash"));
+  (spans.length ? spans : [row.querySelector(".blk") || row]).forEach(e => { void e.offsetWidth; e.classList.add("focus-flash"); });
+  setTimeout(() => document.querySelectorAll(".focus-flash").forEach(e => e.classList.remove("focus-flash")), 3200);
+  activate(annId, false);
+}
 function activate(annId, scrollCard) {
   const wasOpen = M.expandAll || M.openCards.has(annId);
   M.activeAnn = annId;
@@ -796,13 +876,13 @@ export function renderMs(root) {
   const revs = revMap();
   const seq = sequence(revs);
   // 도구 모음과 사이드바는 가볍게 통째로 교체 (입력 중이면 유지)
-  const barSig = sigOf([M.view, M.show, M.hideResolved, M.expandAll, S.revs.map(r => r.status), S.anns.filter(a => !a.resolved).length]);
+  const barSig = sigOf([M.view, M.show, M.hideResolved, M.expandAll, M.owner, ownerList(), S.revs.map(r => r.status), S.anns.filter(a => !a.resolved).length]);
   if (mounted.bar.dataset.sig !== barSig && !typingIn(mounted.bar)) {
     mounted.bar.replaceChildren(toolbar());
     mounted.bar.dataset.sig = barSig;
   }
   const tabs = [["toc", "목차"], ["bm", "책갈피"], ["anns", "표시 목록"], ["revs", "수정 목록"]];
-  const sideSig = sigOf([M.side, M.sideFilter, S.anns.map(a => [a.id, a.bid, a.type, a.text, a.resolved, a.itemId]), S.revs.map(r => [r.id, r.status, r.items, r.note, r.updatedAt]), S.items.map(i => [i.id, i.no, i.topic])]);
+  const sideSig = sigOf([M.side, M.sideFilter, M.owner, M.activeAnn, S.anns.map(a => [a.id, a.bid, a.type, a.text, a.resolved, a.itemId, a.by]), S.revs.map(r => [r.id, r.status, r.items, r.note, r.updatedAt]), S.items.map(i => [i.id, i.no, i.topic])]);
   if (mounted.side.dataset.sig !== sideSig && !typingIn(mounted.side)) {
     const st = mounted.side.querySelector(".side-body");
     const scroll = st ? st.scrollTop : 0;
@@ -821,6 +901,7 @@ export function renderMs(root) {
   if (M.activeAnn) document.querySelectorAll(`.pc[data-anns~="${CSS.escape(M.activeAnn)}"]`).forEach(e => e.classList.add("active-hl"));
   if (M.q) runSearch(false);
   if (M.pendingScroll) { const b = M.pendingScroll; M.pendingScroll = null; setTimeout(() => scrollToBlock(b), 30); }
+  if (M.pendingFocus) { const id = M.pendingFocus; M.pendingFocus = null; setTimeout(() => doFocus(id), 60); }
 }
 export function unmountMs() { mounted = null; closeEditor(); closePopover(); closeSelbar(); }
 document.addEventListener("keydown", e => { if (e.key === "Escape") { closePopover(); closeSelbar(); } });

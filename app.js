@@ -1,16 +1,16 @@
 import { GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "fb/auth";
 import {
   S, h, db, auth, toast, fmt, tsDate, errMsg, myName, writeLog, snapList, cut, sigOf, keyed, patchChildren,
-  scheduleRender, setRenderer, restoreFocus, autosize, editArea, editInput, selectBox, setField, confirmButton,
+  scheduleRender, setRenderer, restoreFocus, autosize, editArea, foldText, editInput, selectBox, setField, confirmButton,
   ownerOptions, itemLabel, itemById, reviewerName, codesOf, codeText, lsSet, saveOpen, copyText, STATUS,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot,
   serverTimestamp, writeBatch
-} from "./core.js?v=10";
-import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary } from "./ms.js?v=10";
-import { renderFiles } from "./files.js?v=10";
-import { renderChat } from "./chat.js?v=10";
-import { plainOf } from "./markup.js?v=10";
-import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=10";
+} from "./core.js?v=11";
+import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=11";
+import { renderFiles } from "./files.js?v=11";
+import { renderChat } from "./chat.js?v=11";
+import { plainOf } from "./markup.js?v=11";
+import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=11";
 
 const J_STATUS = ["후보", "검토 중", "유력", "제외", "확정"];
 const TABS = [
@@ -236,6 +236,38 @@ function sourcesOf(it) {
   if (it.original || it.translation) return [{ rv: it.reviewer, label: itemLabel(it), original: it.original || "", translation: it.translation || "" }];
   return [];
 }
+/* v11: 내 할 일. 할 일 탭에서 담당이 나인 미완료 일 + 내 대응 항목에 달린 미해결 '문제'·'리뷰어 지적'을 한곳에 모은다 */
+function myTodoCard() {
+  const me = myName();
+  const tasks = S.tasks.filter(t => !t.done && (t.owner || "") === me).sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999") || (a.order || 0) - (b.order || 0));
+  const mine = new Set(S.items.filter(it => (it.owner || "") === me).map(it => it.id));
+  const open = S.anns.filter(a => !a.resolved && mine.has(a.itemId) && (a.type === "issue" || a.type === "reviewer"));
+  const key = "mytodo:closed";
+  const isOpen = !S.open.has(key);
+  const head = `내 할 일 ${tasks.length}건 · 내 항목의 미해결 문제 ${open.filter(a => a.type === "issue").length}건 · 리뷰어 지적 ${open.filter(a => a.type === "reviewer").length}건`;
+  const taskRow = t => h("div", { class: "todo-row" },
+    h("input", { type: "checkbox", title: "완료로 표시", onchange: e => setField("tasks/" + t.id, "done", e.target.checked, "할 일: " + cut(t.text, 30), "완료", false) }),
+    h("div", { class: "todo-main" },
+      h("div", null, h("span", { class: "todo-t", text: (t.text || "(내용 없음)").split("\n")[0] }), t.due ? h("span", { class: "chip", text: "기한 " + t.due }) : null),
+      (t.note || (t.text || "").includes("\n")) ? h("details", { class: "la-more" }, h("summary", { text: "자세히" }),
+        h("div", { class: "la-rest", text: [(t.text || "").split("\n").slice(1).join("\n"), t.note || ""].filter(Boolean).join("\n\n") })) : null));
+  const annRow = a => h("div", { class: "todo-row" },
+    h("span", { class: "chip t-" + a.type, text: TYPE_KO[a.type] }),
+    h("div", { class: "todo-main" },
+      h("div", null, h("b", { text: annLoc(a) }), " ", h("span", { text: cut(String(a.text || "").split("\n")[0], 120) }))),
+    h("button", { class: "small", text: "원고에서 보기", onclick: () => focusAnn(a.id) }));
+  return h("details", { class: "card mytodo", open: isOpen ? true : null, ontoggle: e => { if (e.target.open) S.open.delete(key); else S.open.add(key); saveOpen(); } },
+    h("summary", null, h("strong", { text: head })),
+    h("div", { class: "todo-sec" }, h("div", { class: "muted", text: "할 일 (할 일·일정 탭에서 담당이 나로 된 것)" }),
+      tasks.length ? tasks.map(taskRow) : h("div", { class: "muted", text: "없음" })),
+    open.length ? h("div", { class: "todo-sec" }, h("div", { class: "muted", text: "내 항목에 달린 미해결 표시 (원고 위치순)" }), sortAnns(open).map(annRow)) : null,
+    h("div", { class: "todo-foot" },
+      h("button", { class: "small", text: "원고 검토에서 내 항목 표시만 보기", onclick: () => { M.owner = me; lsSet("msOwner", me); S.tab = "ms"; lsSet("tab", "ms"); scheduleRender(); } })));
+}
+function sortAnns(list) {
+  const order = new Map((M.blocks || []).map((b, i) => [b.id, i]));
+  return list.slice().sort((a, b) => ((order.get(a.bid) ?? 1e9) - (order.get(b.bid) ?? 1e9)) || ((a.whole ? -1 : a.start) - (b.whole ? -1 : b.start)));
+}
 function itemsSig() { return sigOf(S.items.map(i => [i.id, i.no, i.topic])); }
 function renderItems() {
   const f = S.f;
@@ -273,7 +305,9 @@ function renderItems() {
             h("td", { text: String(L.revs.length) }), h("td", { text: String(L.anns.length) }),
             h("td", { text: String((S.comments[it.id] || []).length) }));
         })))));
-  const nodes = [keyed(summary, "summary", sigOf([S.fnotes.map(n => [n.id, n.kind, n.to, n.resolved, (n.replies || []).length]), showResolved(), S.items.map(i => [i.id, i.no, i.topic, i.status, i.owner, sourcesOf(i).map(s => s.label)]), S.anns.map(a => a.itemId), S.revs.map(r => r.items), Object.values(S.comments).map(c => c.length), S.open.has("overview")]))];
+  const me = myName();
+  const todo = keyed(myTodoCard(), "mytodo", sigOf([me, S.open.has("mytodo:closed"), S.tasks.map(t => [t.id, t.text, t.note, t.owner, t.done, t.due]), S.items.map(i => [i.id, i.owner]), S.anns.map(a => [a.id, a.type, a.resolved, a.itemId, a.text, a.bid]), (M.blocks || []).length]));
+  const nodes = [todo, keyed(summary, "summary", sigOf([S.fnotes.map(n => [n.id, n.kind, n.to, n.resolved, (n.replies || []).length]), showResolved(), S.items.map(i => [i.id, i.no, i.topic, i.status, i.owner, sourcesOf(i).map(s => s.label)]), S.anns.map(a => a.itemId), S.revs.map(r => r.items), Object.values(S.comments).map(c => c.length), S.open.has("overview")]))];
 
   const bar = h("div", { class: "bar" },
     selectBox([["R1", "심사위원 1 의견이 있는 항목"], ["R2", "심사위원 2 의견이 있는 항목"], ["both", "두 심사위원 공통 항목"], ["team", "팀이 추가한 항목"]], f.reviewer, v => { f.reviewer = v; scheduleRender(); }, "모든 항목"),
@@ -293,24 +327,54 @@ function renderItems() {
   return nodes;
 }
 
+const TYPE_KO = { memo: "메모", reviewer: "리뷰어 지적", issue: "문제", bookmark: "책갈피" };
+const TYPE_ORDER = ["reviewer", "memo", "issue", "bookmark"];
 function linkList(it) {
+  // v11: 한 줄 요약 → 펼치면 위치순 목록 → 줄마다 전체 내용은 다시 접힘. [원고에서 보기]는 그 범위로 정확히 이동
   const L = linksForItem(it.id);
+  if (!M.loaded && !M.loading && !M.error && (L.anns.length || L.revs.length)) loadManuscript();
   const chats = S.chat.filter(m => (m.items || []).includes(it.id));
-  const box = h("div", { class: "links" }, h("div", { class: "links-title", text: `원고 반영 내역 · 수정 ${L.revs.length}건 · 표시 ${L.anns.length}건 · 관련 대화 ${chats.length}건` }));
-  const go = bid => { S.tab = "ms"; lsSet("tab", "ms"); M.pendingScroll = bid; scheduleRender(); };
-  for (const r of L.revs) box.append(h("div", { class: "link-line" },
-    h("span", { class: "chip st " + (r.status === "수락" ? "ok" : r.status === "거절" ? "no" : "pend"), text: (r.kind === "insert" ? "새 문단 " : r.del ? "삭제 " : "수정 ") + (r.status || "제안") }),
-    h("span", { text: cut(blockLabel(r.id), 70) }), h("span", { class: "meta", text: ` ${r.author} · ${fmt(r.updatedAt)}${r.note ? " · " + cut(r.note, 60) : ""}` }),
-    h("button", { class: "small", text: "원고에서 보기", onclick: () => go(r.id) })));
-  for (const a of L.anns) box.append(h("div", { class: "link-line" },
-    h("span", { class: "chip t-" + a.type, text: ({ memo: "메모", reviewer: "리뷰어 지적", issue: "문제", bookmark: "책갈피" })[a.type] + (a.resolved ? " (해결)" : "") }),
-    h("span", { text: "“" + cut(a.quote, 60) + "”" }), h("span", { class: "meta", text: ` ${a.text ? cut(a.text, 50) + " · " : ""}${a.name}` }),
-    h("button", { class: "small", text: "원고에서 보기", onclick: () => go(a.bid) })));
-  for (const m of chats) box.append(h("div", { class: "link-line" },
-    h("span", { class: "chip" + (m.pinned ? " st ok" : ""), text: m.pinned ? "결정 사항" : "대화" }),
-    h("span", { text: cut(m.text, 90) }), h("span", { class: "meta", text: ` ${m.name} · ${fmt(m.at)}` })));
-  if (!L.revs.length && !L.anns.length && !chats.length) box.append(h("div", { class: "muted", text: "아직 없습니다. [원고 검토] 탭에서 수정하거나 표시할 때 이 항목을 선택하면 여기에 쌓입니다." }));
-  return box;
+  const order = new Map(M.blocks.map((b, i) => [b.id, i]));
+  const pos = bid => order.get(bid) ?? 1e9;
+  const anns = L.anns.slice().sort((a, b) => (pos(a.bid) - pos(b.bid)) || ((a.whole ? -1 : a.start) - (b.whole ? -1 : b.start)));
+  const byType = TYPE_ORDER.map(t => [t, anns.filter(a => a.type === t).length]).filter(x => x[1]);
+  const nClaude = anns.filter(isClaude).length;
+  const openKey = it.id + ":links";
+  const goRev = bid => { S.tab = "ms"; lsSet("tab", "ms"); M.pendingScroll = bid; scheduleRender(); };
+  const sumText = `원고 표시 ${anns.length}건` + (byType.length ? ` (${byType.map(([t, n]) => TYPE_KO[t] + " " + n).join(" · ")})` : "") +
+    ` · 원고 수정 ${L.revs.length}건 · 관련 대화 ${chats.length}건` + (nClaude ? ` · 이 중 Claude 작성 ${nClaude}건` : "");
+  const body = h("div", { class: "links-body" });
+  if (!anns.length && !L.revs.length && !chats.length) body.append(h("div", { class: "muted", text: "아직 없습니다. [원고 검토] 탭에서 수정하거나 표시할 때 이 항목을 선택하면 여기에 쌓입니다." }));
+  for (const a of anns) {
+    const lines = String(a.text || "").split("\n");
+    const first = lines[0] || ("“" + cut(a.quote, 80) + "”");
+    const rest = lines.slice(1).join("\n").trim();
+    const key = it.id + ":ln:" + a.id;
+    body.append(h("div", { class: "link-ann" + (a.resolved ? " resolved" : "") },
+      h("div", { class: "la-head" },
+        h("span", { class: "chip t-" + a.type, text: TYPE_KO[a.type] + (a.resolved ? " (해결)" : "") }),
+        h("span", { class: "la-loc", text: annLoc(a) }),
+        isClaude(a) ? h("span", { class: "chip by-claude", text: "Claude 작성" }) : h("span", { class: "meta", text: a.name || "" }),
+        a.editedBy === "Claude" && !isClaude(a) ? h("span", { class: "chip by-claude", text: "Claude 수정" }) : null,
+        h("span", { class: "grow" }),
+        h("button", { class: "small", text: "원고에서 보기", title: "원고 검토 탭에서 이 표시의 범위로 이동해 강조합니다", onclick: () => focusAnn(a.id) })),
+      h("div", { class: "la-first", text: cut(first, 160) }),
+      rest || (a.quote && !a.whole) ? h("details", { class: "la-more", open: S.open.has(key) ? true : null, ontoggle: e => { if (e.target.open) S.open.add(key); else S.open.delete(key); saveOpen(); } },
+        h("summary", { text: "자세히" }),
+        a.quote && !a.whole ? h("div", { class: "la-quote", text: "범위: “" + a.quote + "”" }) : null,
+        rest ? h("div", { class: "la-rest", text: rest }) : null) : null));
+  }
+  for (const r of L.revs) body.append(h("div", { class: "link-ann" },
+    h("div", { class: "la-head" },
+      h("span", { class: "chip st " + (r.status === "수락" ? "ok" : r.status === "거절" ? "no" : "pend"), text: (r.kind === "insert" ? "새 문단 " : r.del ? "삭제 " : "수정 ") + (r.status || "제안") }),
+      h("span", { class: "la-loc", text: locLabel(r.id) }), h("span", { class: "meta", text: `${r.author || ""} · ${fmt(r.updatedAt)}` }),
+      h("span", { class: "grow" }), h("button", { class: "small", text: "원고에서 보기", onclick: () => goRev(r.id) })),
+    r.note ? h("div", { class: "la-first", text: cut(r.note, 160) }) : null));
+  for (const m of chats) body.append(h("div", { class: "link-ann" },
+    h("div", { class: "la-head" }, h("span", { class: "chip" + (m.pinned ? " st ok" : ""), text: m.pinned ? "결정 사항" : "대화" }), h("span", { class: "meta", text: `${m.name} · ${fmt(m.at)}` })),
+    h("div", { class: "la-first", text: cut(m.text, 200) })));
+  return h("details", { class: "links", open: S.open.has(openKey) ? true : null, ontoggle: e => { if (e.target.open) S.open.add(openKey); else S.open.delete(openKey); saveOpen(); } },
+    h("summary", { class: "links-title", text: sumText }), body);
 }
 
 function renderItemCard(it) {
@@ -320,12 +384,12 @@ function renderItemCard(it) {
   const srcs = sourcesOf(it);
   const cmts = S.comments[it.id] || [];
   const L = linksForItem(it.id);
-  const sig = sigOf([it, cmts, [...S.open].filter(k => k.startsWith(it.id + ":")), ownerOptions(),
+  const sig = sigOf([it, cmts, [...S.open].filter(k => k.startsWith(it.id + ":") || k.startsWith(path + "#")), ownerOptions(),
     [...Object.keys(S.dirty)].filter(k => k.includes(it.id)).map(k => [k, S.dirty[k]]),
     [...S.remoteChanged].filter(k => k.includes(it.id)),
     Object.entries(S.armed).filter(([k, v]) => k.includes(it.id) && v > Date.now()).map(x => x[0]),
     cmts.map(c => S.armed["delc:" + c.id] > Date.now()),
-    L.revs.map(r => [r.id, r.status, r.note, r.updatedAt, r.author, blockLabel(r.id)]), L.anns.map(a => [a.id, a.text, a.resolved, a.quote]),
+    L.revs.map(r => [r.id, r.status, r.note, r.updatedAt, r.author, blockLabel(r.id)]), L.anns.map(a => [a.id, a.text, a.resolved, a.quote, a.bid, a.start, a.by, a.editedBy]), M.blocks.length,
     S.chat.filter(m => (m.items || []).includes(it.id)).map(m => [m.id, m.pinned, m.text]), M.loaded,
     memoOn(it.id), notesSig(it.id)]);
   const head = h("div", { class: "card-head" },
@@ -359,7 +423,7 @@ function renderItemCard(it) {
       S.remoteChanged.has(key) ? h("span", { class: "badge-remote", text: "다른 사람이 수정함" }) : null));
     grid.append(h("div", { class: isKey ? "key-field" : "" }, memo
       ? renderNoteField(it, path, field, flabel, it[field])
-      : editArea(path, field, it[field], label, flabel, { placeholder: isKey ? "팀 논의로 정한 대응 방향" : "" })));
+      : foldText(path, field, it[field], label, flabel, { placeholder: isKey ? "팀 논의로 정한 대응 방향" : "" })));
   }
   const newKey = "newc#" + it.id;
   const ctext = h("textarea", { class: "auto", placeholder: "댓글 (Ctrl+Enter로 등록)", rows: 1, dataset: { key: newKey }, value: S.dirty[newKey] || "",
@@ -469,8 +533,8 @@ function renderDocs() {
         h("span", { class: "meta", text: d.updatedBy ? `마지막 수정 ${d.updatedBy} · ${fmt(d.updatedAt)}` : "" }),
         S.isAdmin ? confirmButton("삭제", async () => { try { await deleteDoc(doc(db, "docs", d.id)); await writeLog("자료 삭제", d.title, "", "", ""); } catch (e) { toast(errMsg(e)); } }, "small danger", "deld:" + d.id) : null),
       h("details", { class: "src", open: S.open.has(key) ? true : null, ontoggle: e => { if (e.target.open) S.open.add(key); else S.open.delete(key); saveOpen(); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
-        h("summary", { text: "내용 보기·편집" }), editArea(path, "body", d.body, "자료: " + d.title, "본문")));
-    nodes.push(keyed(card, d.id, sigOf([d, S.open.has(key), S.dirty[path + "#body"], S.dirty[path + "#title"], S.armed["deld:" + d.id] > Date.now()])));
+        h("summary", { text: S.open.has(key) ? "내용 (누르면 접힘)" : "내용 · " + cut((String(d.body || "").split("\n").find(x => x.trim()) || "비어 있음").trim(), 90) }), foldText(path, "body", d.body, "자료: " + d.title, "본문")));
+    nodes.push(keyed(card, d.id, sigOf([d, S.open.has(key), S.dirty[path + "#body"], S.dirty[path + "#title"], S.armed["deld:" + d.id] > Date.now(), [...S.open].filter(k => k.startsWith(path + "#"))])));
   }
   return nodes;
 }

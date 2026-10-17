@@ -68,6 +68,7 @@ export function tsDate(ts) {
   if (!ts) return null;
   if (typeof ts.toDate === "function") return ts.toDate();
   if (ts instanceof Date) return ts;
+  if (typeof ts === "number") return new Date(ts);
   return null;
 }
 export function tsMs(ts) { const d = tsDate(ts); return d ? d.getTime() : 0; }
@@ -176,6 +177,73 @@ export function editArea(path, field, remoteVal, targetLabel, fieldLabel, opts =
   });
   if (key in S.dirty && (remoteVal || "") !== (S.focusVal[key] ?? "") && (remoteVal || "") !== S.dirty[key]) S.remoteChanged.add(key);
   return ta;
+}
+/* ---------- 긴 글 접어 읽기 (v11) ----------
+   글이 길면 기본은 읽기 보기: 첫 단락은 보이고, "1. ", "① ", "[제목]" 같은 제목 줄 아래는 접힌다.
+   [편집]을 누르면 기존 입력칸으로 바뀐다. 접힘 상태는 각자 브라우저에 기억된다. */
+const FOLD_MIN = 500;
+const FOLD_LINES = 12;
+const TOP_RE = /^\s*(\d{1,2}\.\s+\S|\[[^\]]{1,60}\]\s*$|#{1,3}\s+\S)/;
+const SUB_RE = /^\s*[\u2460-\u2473]/;
+const trimLines = a => { a = a.slice(); while (a.length && !a[a.length - 1].trim()) a.pop(); while (a.length && !a[0].trim()) a.shift(); return a; };
+const countLines = a => a.filter(x => x.trim()).length;
+function splitBy(lines, isHead) {
+  const pre = [], secs = [];
+  for (const ln of lines) {
+    if (isHead(ln)) secs.push({ head: ln.trim(), lines: [] });
+    else if (secs.length) secs[secs.length - 1].lines.push(ln);
+    else pre.push(ln);
+  }
+  return { pre: trimLines(pre), secs: secs.map(x => ({ head: x.head, lines: trimLines(x.lines) })) };
+}
+/* 제목 줄 규칙: "1. 제목", "[제목]", "# 제목"이 큰 제목, "①"이 그 안의 작은 제목. 큰 제목이 없으면 "①"이 큰 제목. */
+export function splitSections(text) {
+  const lines = String(text || "").split("\n");
+  const useTop = lines.some(l => TOP_RE.test(l));
+  const top = splitBy(lines, l => (useTop ? TOP_RE : SUB_RE).test(l));
+  return {
+    intro: top.pre.join("\n"),
+    secs: top.secs.map(x => {
+      const sub = useTop && x.lines.some(l => SUB_RE.test(l)) ? splitBy(x.lines, l => SUB_RE.test(l)) : null;
+      return { head: x.head, n: countLines(x.lines), pre: sub ? sub.pre.join("\n") : x.lines.join("\n"),
+        subs: sub ? sub.secs.map(y => ({ head: y.head, n: countLines(y.lines), body: y.lines.join("\n") })) : [] };
+    })
+  };
+}
+export function foldText(path, field, remoteVal, targetLabel, fieldLabel, opts = {}) {
+  const key = path + "#" + field;
+  const editKey = key + ":edit";
+  const val = key in S.dirty ? S.dirty[key] : (remoteVal || "");
+  const long = val.length >= (opts.min || FOLD_MIN) || val.split("\n").length >= FOLD_LINES;
+  const { intro, secs } = splitSections(val);
+  const foldable = secs.filter(x => x.n);
+  if (!long || !foldable.length || S.open.has(editKey) || key in S.dirty) {
+    const ta = editArea(path, field, remoteVal, targetLabel, fieldLabel, opts);
+    if (!long || !foldable.length) return ta;
+    return h("div", { class: "fold edit" },
+      h("div", { class: "fold-bar" }, h("span", { class: "muted", text: "편집 중 (칸 밖을 누르면 저장)" }), h("span", { class: "grow" }),
+        h("button", { class: "small", text: "읽기 보기로", onclick: () => { S.open.delete(editKey); saveOpen(); scheduleRender(); } })),
+      ta);
+  }
+  const keys = [];
+  secs.forEach((x, i) => { if (x.n) keys.push(key + ":s" + i); x.subs.forEach((y, j) => { if (y.n) keys.push(key + ":s" + i + "." + j); }); });
+  const allOpen = keys.every(k => S.open.has(k));
+  const fold = (k, cls, head, n, body) => h("details", { class: cls, open: S.open.has(k) ? true : null,
+      ontoggle: e => { if (e.target !== e.currentTarget) return; if (e.target.open) S.open.add(k); else S.open.delete(k); saveOpen(); } },
+    h("summary", null, h("span", { class: "fold-h", text: head }), h("span", { class: "fold-n", text: ` ${n}줄` })), body);
+  return h("div", { class: "fold" },
+    h("div", { class: "fold-bar" },
+      h("span", { class: "muted", text: "제목을 누르면 펼쳐집니다" }), h("span", { class: "grow" }),
+      h("button", { class: "small", text: allOpen ? "모두 접기" : "모두 펼치기", onclick: () => { keys.forEach(k => allOpen ? S.open.delete(k) : S.open.add(k)); saveOpen(); scheduleRender(); } }),
+      h("button", { class: "small", text: "편집", onclick: () => { S.open.add(editKey); saveOpen(); scheduleRender(); setTimeout(() => { const t = document.querySelector(`textarea[data-key="${CSS.escape(key)}"]`); if (t) { autosize(t); t.focus(); } }, 60); } })),
+    intro ? h("div", { class: "fold-intro", text: intro }) : null,
+    secs.map((x, i) => {
+      if (!x.n) return h("div", { class: "fold-title", text: x.head });
+      return fold(key + ":s" + i, "fold-sec", x.head, x.n, h("div", { class: "fold-body" },
+        x.pre ? h("div", { class: "fold-pre", text: x.pre }) : null,
+        x.subs.map((y, j) => y.n ? fold(key + ":s" + i + "." + j, "fold-sub", y.head, y.n, h("div", { class: "fold-subbody", text: y.body }))
+          : h("div", { class: "fold-subtitle", text: y.head }))));
+    }));
 }
 export function editInput(path, field, remoteVal, targetLabel, fieldLabel, opts = {}) {
   const key = path + "#" + field;
