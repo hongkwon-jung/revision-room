@@ -5,12 +5,12 @@ import {
   ownerOptions, itemLabel, itemById, reviewerName, codesOf, codeText, lsSet, saveOpen, copyText, STATUS,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot,
   serverTimestamp, writeBatch
-} from "./core.js?v=11";
-import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=11";
-import { renderFiles } from "./files.js?v=11";
-import { renderChat } from "./chat.js?v=11";
-import { plainOf } from "./markup.js?v=11";
-import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=11";
+} from "./core.js?v=12";
+import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=12";
+import { renderFiles } from "./files.js?v=12";
+import { renderChat } from "./chat.js?v=12";
+import { plainOf } from "./markup.js?v=12";
+import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=12";
 
 const J_STATUS = ["후보", "검토 중", "유력", "제외", "확정"];
 const TABS = [
@@ -259,7 +259,8 @@ function myTodoCard() {
   return h("details", { class: "card mytodo", open: isOpen ? true : null, ontoggle: e => { if (e.target.open) S.open.delete(key); else S.open.add(key); saveOpen(); } },
     h("summary", null, h("strong", { text: head })),
     h("div", { class: "todo-sec" }, h("div", { class: "muted", text: "할 일 (할 일·일정 탭에서 담당이 나로 된 것)" }),
-      tasks.length ? tasks.map(taskRow) : h("div", { class: "muted", text: "없음" })),
+      tasks.length ? tasks.map(taskRow) : h("div", { class: "muted", text: "없음" }),
+      S.tasks.some(t => !t.done && t.owner === "공동") ? h("div", { class: "muted", text: `담당이 '공동'인 미완료 일 ${S.tasks.filter(t => !t.done && t.owner === "공동").length}건은 할 일·일정 탭에 있습니다.` }) : null),
     open.length ? h("div", { class: "todo-sec" }, h("div", { class: "muted", text: "내 항목에 달린 미해결 표시 (원고 위치순)" }), sortAnns(open).map(annRow)) : null,
     h("div", { class: "todo-foot" },
       h("button", { class: "small", text: "원고 검토에서 내 항목 표시만 보기", onclick: () => { M.owner = me; lsSet("msOwner", me); S.tab = "ms"; lsSet("tab", "ms"); scheduleRender(); } })));

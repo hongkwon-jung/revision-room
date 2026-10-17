@@ -2,9 +2,9 @@ import {
   S, h, db, toast, fmt, tsMs, errMsg, myName, writeLog, scheduleRender, confirmButton, keyed, sigOf, patchChildren,
   itemLabel, itemById, itemFull, codeText, lsGet, lsSet, colorFor, cut, copyText, modal, editArea, autosize, restoreFocus,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, where, serverTimestamp, writeBatch, arrayUnion
-} from "./core.js?v=11";
-import { parseMarkup, plainOf, diffMarkup, originalPieces, insertedPieces, fmtNode, markupNodes, tableToText, textToTable } from "./markup.js?v=11";
-import { getFileURL, fileByPath } from "./files.js?v=11";
+} from "./core.js?v=12";
+import { parseMarkup, plainOf, diffMarkup, originalPieces, insertedPieces, fmtNode, markupNodes, tableToText, textToTable } from "./markup.js?v=12";
+import { getFileURL, fileByPath } from "./files.js?v=12";
 
 export const M = {
   blocks: [], byId: new Map(), plain: new Map(), loaded: false, loading: false, error: "",
@@ -498,7 +498,7 @@ function toolbar() {
   const exp = h("div", { class: "exports" },
     h("button", { class: "small", text: "최종본 텍스트 복사", onclick: () => copyText(finalText()) }),
     h("button", { class: "small", text: "수정·표시 목록 복사", onclick: () => copyText(changeList()) }),
-    h("button", { class: "small", text: "Word로 내보내기", title: "제출본 docx에 표시를 Word 메모로, 수정을 변경 추적으로 넣어 내려받기", onclick: () => import("./export.js?v=11").then(m => m.openExportDialog()).catch(e => toast("열지 못했습니다: " + errMsg(e))) }),
+    h("button", { class: "small", text: "Word로 내보내기", title: "제출본 docx에 표시를 Word 메모로, 수정을 변경 추적으로 넣어 내려받기", onclick: () => import("./export.js?v=12").then(m => m.openExportDialog()).catch(e => toast("열지 못했습니다: " + errMsg(e))) }),
     h("button", { class: "small", text: "사용법", onclick: showHelp }));
   return h("div", { class: "ms-bar" }, h("div", { class: "ms-bar-row" }, h("span", { class: "muted", text: "보기" }), seg, search, h("span", { class: "grow" }), exp),
     h("div", { class: "ms-bar-row" }, ownerSel, toggles, legend, h("span", { class: "grow" }), stats));
@@ -553,8 +553,8 @@ function showHit() {
 export function scrollToBlock(bid) {
   const el = document.getElementById("row-" + bid);
   if (!el) { M.pendingScroll = bid; return; }
-  el.scrollIntoView({ block: "center" });
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+  stickScroll(() => document.getElementById("row-" + bid));
 }
 function saveCards() { lsSet("msCards", JSON.stringify([...M.openCards].slice(-300))); }
 // v11: 표시 하나로 정확히 이동 (필터에 가려 있으면 풀고, 범위를 주황 테두리로 강조, 카드 펼침)
@@ -571,18 +571,30 @@ export function focusAnn(annId) {
   if (S.tab !== "ms") { S.tab = "ms"; lsSet("tab", "ms"); }
   scheduleRender();
 }
+// v12: 그림이 늦게 로드되며 위치가 밀리는 경우가 있어 1.6초 동안 몇 번 다시 맞춘다. 사용자가 스크롤하면 멈춘다
+function stickScroll(find, after) {
+  let stop = false;
+  const cancel = () => { stop = true; };
+  ["wheel", "touchmove", "keydown", "mousedown"].forEach(ev => window.addEventListener(ev, cancel, { once: true, passive: true, capture: true }));
+  const go = () => { if (stop) return; const el = find(); if (el) el.scrollIntoView({ block: "center" }); if (after) after(); };
+  go(); [300, 800, 1600].forEach(t => setTimeout(go, t));
+  setTimeout(() => ["wheel", "touchmove", "keydown", "mousedown"].forEach(ev => window.removeEventListener(ev, cancel, { capture: true })), 1700);
+}
 function doFocus(annId) {
   const a = S.anns.find(x => x.id === annId);
   if (!a) return;
-  const spans = [...document.querySelectorAll(`.pc[data-anns~="${CSS.escape(annId)}"]`)];
-  const row = document.getElementById("row-" + a.bid);
-  const target = spans[0] || row;
-  if (!target) { M.pendingFocus = annId; return; }
-  target.scrollIntoView({ block: "center" });
-  document.querySelectorAll(".focus-flash").forEach(e => e.classList.remove("focus-flash"));
-  (spans.length ? spans : [row.querySelector(".blk") || row]).forEach(e => { void e.offsetWidth; e.classList.add("focus-flash"); });
-  setTimeout(() => document.querySelectorAll(".focus-flash").forEach(e => e.classList.remove("focus-flash")), 3200);
+  const spansOf = () => [...document.querySelectorAll(`.pc[data-anns~="${CSS.escape(annId)}"]`)];
+  const rowOf = () => document.getElementById("row-" + a.bid);
+  if (!spansOf().length && !rowOf()) { M.pendingFocus = annId; return; }
   activate(annId, false);
+  const flash = () => {
+    const sp = spansOf(), row = rowOf();
+    const els = sp.length ? sp : (row ? [row.querySelector(".blk") || row] : []);
+    els.forEach(e => e.classList.add("focus-flash"));
+  };
+  document.querySelectorAll(".focus-flash").forEach(e => e.classList.remove("focus-flash"));
+  stickScroll(() => spansOf()[0] || rowOf(), flash);
+  setTimeout(() => document.querySelectorAll(".focus-flash").forEach(e => e.classList.remove("focus-flash")), 4000);
 }
 function activate(annId, scrollCard) {
   const wasOpen = M.expandAll || M.openCards.has(annId);
