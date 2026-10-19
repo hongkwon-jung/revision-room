@@ -24,6 +24,10 @@ const TYPE_RANK = { bookmark: 0, reviewer: 1, issue: 2, memo: 3 };
 const annOrder = (x, y) => ((TYPE_RANK[x.type] ?? 9) - (TYPE_RANK[y.type] ?? 9)) || (tsMs(x.createdAt) - tsMs(y.createdAt));
 const VIEW_LABEL = { orig: "원문", markup: "변경 표시", final: "최종본" };
 const TEXT_TYPES = new Set(["title", "authors", "affil", "h1", "h2", "h3", "p", "caption", "tnote", "ref"]);
+const INSERT_TYPE_LABEL = {
+  p: "본문", h1: "장 제목 (VI., VII.)", h2: "절 제목 (A., B., C.)", h3: "소절 제목 (1., 2., 3.)",
+  caption: "그림·표 캡션", tnote: "표 주석", ref: "참고문헌", title: "논문 제목", authors: "저자", affil: "소속"
+};
 const SPECIAL = ["μ", "°", "×", "−", "–", "—", "±", "≤", "≥", "≈", "~", "→", "↔", "·", "Ω", "α", "β", "γ", "δ", "Δ", "σ", "τ", "θ", "λ", "π", "ε", "²", "³", "⁻", "¹", "⁰", "½", "‰", "Å", "℃", "′", "″", "“", "”", "‘", "’"];
 
 /* ---------- 불러오기 ---------- */
@@ -387,18 +391,21 @@ function rowFor(entry, revs) {
 
 /* ---------- 사이드바 ---------- */
 function sideToc(seq) {
+  const blocks = seq.flatMap(e => e.inserted
+    ? (M.view === "orig" || e.rev.status === "거절" ? [] : [{ id: e.id, type: e.rev.btype || "p", t: e.rev.text || "" }])
+    : [e.b]);
   const counts = new Map();
   let curH = null;
   const hOf = new Map();
-  for (const e of seq) {
-    if (!e.inserted && /^h[123]$/.test(e.b.type)) curH = e.id;
-    hOf.set(e.id, curH);
+  for (const b of blocks) {
+    if (/^h[123]$/.test(b.type)) curH = b.id;
+    hOf.set(b.id, curH);
   }
   const bump = (bid, k) => { const hid = hOf.get(bid); if (!hid) return; const c = counts.get(hid) || { a: 0, r: 0 }; c[k]++; counts.set(hid, c); };
   for (const a of S.anns) if (!a.resolved) bump(a.bid, "a");
   for (const r of S.revs) bump(r.kind === "insert" ? r.id : r.id, "r");
   const out = [];
-  for (const b of M.blocks) {
+  for (const b of blocks) {
     if (/^h[123]$/.test(b.type)) {
       const c = counts.get(b.id);
       out.push(h("div", { class: "toc " + b.type, onclick: () => scrollToBlock(b.id) },
@@ -715,6 +722,7 @@ function openEditor(target) {
   const ta = h("textarea", { class: "ed-ta mono", value: text, spellcheck: "false" });
   const prev = h("div", { class: "ed-prev blk " + (isTable ? "t-table" : "t-" + (btype === "p" ? "p" : btype)) });
   const refresh = () => {
+    prev.className = "ed-prev blk t-" + btype;
     prev.replaceChildren();
     if (isTable) {
       const oldRows = kind === "insert" ? [] : textToTable(base), newRows = textToTable(ta.value);
@@ -762,6 +770,14 @@ function openEditor(target) {
     h("button", { class: "small", title: "굵게", onclick: () => wrapSel("{b:", "}") }, h("b", { text: "B" })),
     isTable ? h("span", { class: "meta", text: "표: 한 줄 = 한 행, 칸 구분 ' | ', 칸 안 줄바꿈 ' ¶ '" }) : null,
     h("span", { class: "specials" }, SPECIAL.map(c => h("button", { class: "sp", text: c, onclick: () => insertText(c) }))));
+  if (kind === "insert" && !isTable) {
+    const styleSelect = h("select", { "aria-label": "추가 문단 서식", onchange: e => {
+      if (!TEXT_TYPES.has(e.target.value)) return;
+      btype = e.target.value; E.btype = btype; refresh();
+    } }, Object.entries(INSERT_TYPE_LABEL).map(([value, label]) => h("option", { value, text: label })));
+    styleSelect.value = btype;
+    tools.prepend(h("label", { class: "tg" }, "문단 서식 ", styleSelect));
+  }
   const where = kind === "insert" ? "새 문단 · " + cut(blockLabel(insertAfter), 60) : cut(blockLabel(bid), 90);
   const panel = h("div", { class: "editor" },
     h("div", { class: "ed-head" }, h("strong", { text: kind === "insert" ? "새 문단 추가" : isTable ? "표 수정" : "문단 수정" }), h("span", { class: "meta", text: where }),
@@ -894,7 +910,7 @@ export function renderMs(root) {
     mounted.bar.dataset.sig = barSig;
   }
   const tabs = [["toc", "목차"], ["bm", "책갈피"], ["anns", "표시 목록"], ["revs", "수정 목록"]];
-  const sideSig = sigOf([M.side, M.sideFilter, M.owner, M.activeAnn, S.anns.map(a => [a.id, a.bid, a.type, a.text, a.resolved, a.itemId, a.by]), S.revs.map(r => [r.id, r.status, r.items, r.note, r.updatedAt]), S.items.map(i => [i.id, i.no, i.topic])]);
+  const sideSig = sigOf([M.view, M.side, M.sideFilter, M.owner, M.activeAnn, S.anns.map(a => [a.id, a.bid, a.type, a.text, a.resolved, a.itemId, a.by]), S.revs.map(r => [r.id, r.btype, r.status, r.items, r.note, r.updatedAt]), S.items.map(i => [i.id, i.no, i.topic])]);
   if (mounted.side.dataset.sig !== sideSig && !typingIn(mounted.side)) {
     const st = mounted.side.querySelector(".side-body");
     const scroll = st ? st.scrollTop : 0;
@@ -926,3 +942,4 @@ export function linksForItem(itemId) {
     revs: S.revs.filter(r => (r.items || []).includes(itemId))
   };
 }
+
