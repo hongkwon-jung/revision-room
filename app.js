@@ -6,7 +6,7 @@ import {
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc, deleteDoc, collection, query, orderBy, limit, onSnapshot,
   serverTimestamp, writeBatch
 } from "./core.js?v=15";
-import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=15";
+import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=15-format1";
 import { renderFiles } from "./files.js?v=15";
 import { renderChat } from "./chat.js?v=15";
 import { plainOf } from "./markup.js?v=15";
@@ -687,3 +687,4 @@ async function migrateV2() {
   await writeLog("대응 항목 통합", "심사평 대응", "", "심사 의견 11건", `대응 항목 ${V2_PLAN.length}개 (+팀 추가 ${n - V2_PLAN.length}개)`);
   return { done, total: n };
 }
+
