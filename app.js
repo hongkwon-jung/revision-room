@@ -210,7 +210,7 @@ async function checkVersion() {
   if (!APP_V || document.getElementById("newver")) return;
   try {
     const t = await (await fetch("index.html?nc=" + Date.now(), { cache: "no-store" })).text();
-    const m = t.match(/app\.js\?v=([0-9a-z]+)/);
+    const m = t.match(/app\.js\?v=([0-9A-Za-z._-]+)/);
     if (m && m[1] !== APP_V) document.body.prepend(h("div", { id: "newver", class: "newver" },
       "사이트가 새 버전으로 바뀌었습니다. 쓰던 내용이 저장된 것을 확인한 뒤 새로고침해 주세요. ",
       h("button", { text: "새로고침", onclick: () => location.reload() })));
