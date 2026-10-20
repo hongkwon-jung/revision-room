@@ -142,7 +142,7 @@ async function entriesToFiles(entry, prefix, out) {
     }
   }
 }
-async function handleDrop(ev) {
+async function handleDrop(ev, mapPath) {
   ev.preventDefault();
   const items = [...(ev.dataTransfer.items || [])];
   const out = [];
@@ -151,23 +151,29 @@ async function handleDrop(ev) {
   } else {
     for (const f of ev.dataTransfer.files) out.push({ file: f, path: f.name });
   }
-  if (out.length) queueUploads(out);
+  const list = out.map(o => ({ file: o.file, path: mapPath ? mapPath(o.path, o.file) : o.path })).filter(o => o.path);
+  if (list.length) queueUploads(list);
 }
 window.__queueUploads = (files, prefix = "") => queueUploads([...files].map(f => ({ file: f, path: prefix + (f.webkitRelativePath || f.name) })));
 
-export function renderFiles(hidePrefix) {
+/* opts: filter(파일→표시 여부), mapPath(상대경로, File→저장 경로, 빈 값이면 건너뜀), key(탭 구분), noDrop, rowExtra(파일→칸), folderExtra(폴더, 파일들→노드), dropNote
+   문자열을 넘기면 그 경로로 시작하는 파일을 숨긴다(v21 호환) */
+export function renderFiles(opts = {}) {
+  if (typeof opts === "string") { const hide = opts; opts = { filter: f => !f.path.startsWith(hide) }; }
+  const key = opts.key || "all", mapPath = opts.mapPath || null;
+  const pick = fileList => { const list = [...fileList].map(f => { const rel = f.webkitRelativePath || f.name; return { file: f, path: mapPath ? mapPath(rel, f) : rel }; }).filter(o => o.path); if (list.length) queueUploads(list); };
   const drop = h("div", { class: "dropzone",
     ondragover: e => { e.preventDefault(); drop.classList.add("over"); },
     ondragleave: () => drop.classList.remove("over"),
-    ondrop: e => { drop.classList.remove("over"); handleDrop(e); } },
+    ondrop: e => { drop.classList.remove("over"); handleDrop(e, mapPath); } },
     h("div", { class: "dz-title", text: "여기에 파일이나 폴더를 끌어다 놓으세요" }),
-    h("div", { class: "muted", text: "폴더 구조가 그대로 유지됩니다. 같은 경로·같은 크기의 파일은 건너뜁니다." }),
+    h("div", { class: "muted", text: opts.dropNote || "폴더 구조가 그대로 유지됩니다. 같은 경로·같은 크기의 파일은 건너뜁니다." }),
     h("div", { class: "bar center-bar" },
-      h("label", { class: "btn" }, "파일 선택", h("input", { type: "file", multiple: true, hidden: true, onchange: e => { window.__queueUploads(e.target.files); e.target.value = ""; } })),
-      h("label", { class: "btn" }, "폴더 선택", h("input", { type: "file", multiple: true, webkitdirectory: true, hidden: true, onchange: e => { window.__queueUploads(e.target.files); e.target.value = ""; } }))));
-  keyed(drop, "drop", "static");
+      h("label", { class: "btn" }, "파일 선택", h("input", { type: "file", multiple: true, hidden: true, onchange: e => { pick(e.target.files); e.target.value = ""; } })),
+      h("label", { class: "btn" }, "폴더 선택", h("input", { type: "file", multiple: true, webkitdirectory: true, hidden: true, onchange: e => { pick(e.target.files); e.target.value = ""; } }))));
+  keyed(drop, "drop:" + key, "static");
 
-  const nodes = [drop];
+  const nodes = opts.noDrop ? [] : [drop];
   const active = S.uploads.filter(u => u.state !== "완료" && u.state !== "건너뜀");
   if (S.uploads.length) {
     const doneN = S.uploads.filter(u => u.state === "완료" || u.state === "건너뜀").length;
@@ -181,16 +187,18 @@ export function renderFiles(hidePrefix) {
     nodes.push(keyed(box, "upbox", sigOf(S.uploads.map(u => [u.path, u.done, u.state]))));
   }
 
-  const files = S.files.filter(f => !hidePrefix || !f.path.startsWith(hidePrefix)).sort((a, b) => a.path.localeCompare(b.path, "ko"));
+  const files = S.files.filter(f => !opts.filter || opts.filter(f)).sort((a, b) => a.path.localeCompare(b.path, "ko"));
   const folders = new Map();
   for (const f of files) { const k = f.folder || "(최상위)"; if (!folders.has(k)) folders.set(k, []); folders.get(k).push(f); }
   const total = files.reduce((a, f) => a + (f.size || 0), 0);
-  nodes.push(keyed(h("div", { class: "bar" }, h("span", { class: "count", text: `파일 ${files.length}개 · ${sizeText(total)}` })), "sum", sigOf([files.length, total])));
+  nodes.push(keyed(h("div", { class: "bar" }, h("span", { class: "count", text: `파일 ${files.length}개 · ${sizeText(total)}` })), "sum:" + key, sigOf([files.length, total])));
   for (const [folder, list] of folders) {
-    const sig = sigOf([folder, list.map(f => [f.id, f.size, f.complete, f.uploadedBy, f.uploadedAt]), S.isAdmin, list.map(f => S.armed["delf:" + f.id] > Date.now())]);
+    const sig = sigOf([key, folder, list.map(f => [f.id, f.size, f.complete, f.uploadedBy, f.uploadedAt, f.submit]), S.isAdmin, list.map(f => S.armed["delf:" + f.id] > Date.now())]);
     const tbl = h("table", { class: "t files" },
-      h("thead", null, h("tr", null, h("th", { colspan: 5, text: folder }))),
+      h("thead", null, h("tr", null, h("th", { colspan: opts.rowExtra ? 6 : 5 },
+        opts.folderExtra ? h("div", { class: "bar" }, h("span", { text: folder }), h("span", { class: "grow" }), opts.folderExtra(folder, list)) : folder))),
       h("tbody", null, list.map(f => h("tr", null,
+        opts.rowExtra ? h("td", { class: "nowrap" }, opts.rowExtra(f)) : null,
         h("td", { class: "fname" }, f.name, f.complete ? null : h("span", { class: "badge warn", text: "올리는 중 또는 미완료" })),
         h("td", { class: "meta nowrap", text: sizeText(f.size || 0) }),
         h("td", { class: "meta nowrap", text: `${f.uploadedBy || ""} ${fmt(f.uploadedAt)}` }),
@@ -198,7 +206,7 @@ export function renderFiles(hidePrefix) {
           f.complete && /pdf|image\/(jpeg|png)|text/.test(f.type || "") ? h("button", { class: "small", text: "열기", onclick: () => openFile(f) }) : null, " ",
           f.complete ? h("button", { class: "small", text: "내려받기", onclick: () => saveFile(f) }) : null),
         h("td", null, S.isAdmin ? confirmButton("삭제", () => deleteFile(f), "small danger", "delf:" + f.id) : null)))));
-    nodes.push(keyed(h("div", { class: "folder" }, tbl), "fd:" + folder, sig));
+    nodes.push(keyed(h("div", { class: "folder" }, tbl), "fd:" + key + ":" + folder, sig));
   }
   return nodes;
 }
