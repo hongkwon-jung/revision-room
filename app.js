@@ -7,7 +7,7 @@ import {
   serverTimestamp, writeBatch
 } from "./core.js?v=15";
 import { renderMs, unmountMs, M, scrollToBlock, blockLabel, linksForItem, itemShortName, msMarkdownSummary, focusAnn, annLoc, locLabel, isClaude, loadManuscript } from "./ms.js?v=15-format1";
-import { renderFilesTab } from "./perm.js?v=21";
+import { renderFilesTab } from "./library.js?v=24";
 import { renderChat } from "./chat.js?v=15";
 import { plainOf } from "./markup.js?v=15";
 import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, copyAiQuestions, itemNotesLines, showResolved, setShowResolved, layoutNotes } from "./fnotes.js?v=15";
