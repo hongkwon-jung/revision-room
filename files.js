@@ -155,7 +155,7 @@ async function handleDrop(ev) {
 }
 window.__queueUploads = (files, prefix = "") => queueUploads([...files].map(f => ({ file: f, path: prefix + (f.webkitRelativePath || f.name) })));
 
-export function renderFiles() {
+export function renderFiles(hidePrefix) {
   const drop = h("div", { class: "dropzone",
     ondragover: e => { e.preventDefault(); drop.classList.add("over"); },
     ondragleave: () => drop.classList.remove("over"),
@@ -181,7 +181,7 @@ export function renderFiles() {
     nodes.push(keyed(box, "upbox", sigOf(S.uploads.map(u => [u.path, u.done, u.state]))));
   }
 
-  const files = S.files.slice().sort((a, b) => a.path.localeCompare(b.path, "ko"));
+  const files = S.files.filter(f => !hidePrefix || !f.path.startsWith(hidePrefix)).sort((a, b) => a.path.localeCompare(b.path, "ko"));
   const folders = new Map();
   for (const f of files) { const k = f.folder || "(최상위)"; if (!folders.has(k)) folders.set(k, []); folders.get(k).push(f); }
   const total = files.reduce((a, f) => a + (f.size || 0), 0);
