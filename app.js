@@ -15,7 +15,7 @@ import { memoOn, setMemo, openCount, notesSig, renderNoteField, noteSummary, cop
 const J_STATUS = ["후보", "검토 중", "유력", "제외", "확정"];
 const TABS = [
   ["items", "심사평 대응"], ["ms", "원고 검토"], ["chat", "회의·대화"], ["tasks", "할 일·일정"],
-  ["journals", "후보 저널"], ["files", "자료실"], ["docs", "메모·자료"], ["archive", "이전 작업"], ["log", "수정 기록"], ["members", "멤버"]
+  ["journals", "타겟 저널"], ["files", "자료실"], ["docs", "메모·자료"], ["archive", "이전 작업"], ["log", "수정 기록"], ["members", "멤버"]
 ];
 const ITEM_FIELDS = [
   ["location", "제출본 위치", false],
@@ -497,26 +497,91 @@ function renderTasks() {
   ];
 }
 
-/* ---------- 저널 ---------- */
-const J_FIELDS = [["name", "저널", 160], ["publisher", "출판사", 110], ["scope", "분야·범위", 160], ["format", "리뷰 형식·요건", 180], ["limits", "분량·그림 제한", 150], ["proposer", "제안자", 80], ["note", "메모", 180]];
+/* ---------- 타겟 저널 (v17) ---------- */
+/* journals 컬렉션: 저널 문서(kind 없음)와 투고 자료 점검 항목(kind: "check")을 함께 둔다. 점검 항목은 stage(s1~s5)와 order로 정렬한다 */
+const J_INFO = [["format", "원고 유형·투고 방법"], ["limits", "분량·형식 요건"], ["scope", "분야"], ["note", "비용·라이선스·공식 안내"]];
+const J_STAGES = [
+  ["s1", "1. 투고 전 준비", "팀이 만들고 점검할 자료"],
+  ["s2", "2. 투고할 때", "Wiley Authors 시스템에 올리고 입력할 것"],
+  ["s3", "3. 심사·수정", "결정을 받은 뒤 낼 것"],
+  ["s4", "4. 수락 후", "출판 절차, 주로 교신저자가 처리"],
+  ["s5", "5. 출판 후", "공유와 게시"]
+];
+function firstLine(s) { return (String(s || "").split("\n").find(x => x.trim()) || "").trim(); }
+function stageOpen(sk) { return S.open.has("jstage:" + sk) || (sk === "s1" && !S.open.has("jstage-closed:s1")); }
+function setStageOpen(sk, open) {
+  if (open) { S.open.add("jstage:" + sk); S.open.delete("jstage-closed:" + sk); }
+  else { S.open.delete("jstage:" + sk); if (sk === "s1") S.open.add("jstage-closed:s1"); }
+  saveOpen();
+}
+function checkRow(c) {
+  const path = "journals/" + c.id;
+  const label = "투고 자료: " + (c.title || "");
+  const ik = "jitem:" + c.id;
+  const lab = t => h("div", { class: "meta", style: "margin:8px 0 2px", text: t });
+  return h("details", { style: "border-top:1px solid var(--line);padding:6px 2px" + (c.done ? ";opacity:.75" : ""), open: S.open.has(ik) ? true : null,
+    ontoggle: e => { if (e.target.open) S.open.add(ik); else S.open.delete(ik); saveOpen(); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
+    h("summary", { style: "cursor:pointer;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline" },
+      h("input", { type: "checkbox", checked: !!c.done, title: "완료", onclick: e => e.stopPropagation(), onchange: e => setField(path, "done", e.target.checked, label, "완료", !!c.done) }),
+      h("span", { style: "font-weight:600" + (c.done ? ";text-decoration:line-through" : ""), text: c.title || "(제목 없음)" }),
+      h("span", { class: "muted", style: "flex:1;min-width:200px;font-size:13px", text: cut(firstLine(c.now), 90) }),
+      c.owner ? h("span", { class: "meta", text: "담당 " + c.owner }) : null,
+      c.due ? h("span", { class: "meta", text: "기한 " + c.due }) : null),
+    h("div", { style: "padding:2px 0 6px 26px" },
+      lab("자료 이름"), editInput(path, "title", c.title, label, "자료 이름", { style: "width:100%" }),
+      lab("저널 요건"), editArea(path, "req", c.req, label, "저널 요건"),
+      lab("지금 상태"), editArea(path, "now", c.now, label, "지금 상태"),
+      h("div", { style: "display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px" },
+        h("span", { class: "meta", text: "담당" }), selectBox(ownerOptions(), c.owner || "", v => setField(path, "owner", v, label, "담당", c.owner || ""), "미지정"),
+        h("span", { class: "meta", text: "기한" }), editInput(path, "due", c.due, label, "기한", { type: "date" }),
+        h("span", { class: "grow" }),
+        h("span", { class: "meta", text: c.updatedBy ? `마지막 수정 ${c.updatedBy} · ${fmt(c.updatedAt)}` : "" }),
+        confirmButton("삭제", async () => { try { await deleteDoc(doc(db, "journals", c.id)); await writeLog("투고 자료 삭제", label, "", c.title, ""); } catch (e) { toast(errMsg(e)); } }, "small danger", "delj:" + c.id)),
+      lab("메모"), editArea(path, "note", c.note, label, "메모")));
+}
 function renderJournals() {
-  const addBtn = h("button", { text: "저널 추가", onclick: async () => {
-    try { await addDoc(collection(db, "journals"), { name: "", publisher: "", scope: "", format: "", limits: "", proposer: myName(), status: "후보", note: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: myName() }); await writeLog("저널 추가", "후보 저널", "", "", ""); }
-    catch (e) { toast("추가 실패: " + errMsg(e)); }
-  } });
-  const rows = S.journals.map(j => {
-    const path = "journals/" + j.id;
-    const label = "저널: " + (j.name || "(이름 없음)");
-    return h("tr", null,
-      J_FIELDS.map(([fk, fl, w]) => h("td", { style: `min-width:${w}px` }, editArea(path, fk, j[fk], label, fl))),
-      h("td", null, selectBox(J_STATUS, j.status || "후보", v => setField(path, "status", v, label, "상태", j.status || ""))),
-      h("td", null, confirmButton("삭제", async () => { try { await deleteDoc(doc(db, "journals", j.id)); await writeLog("저널 삭제", label, "", j.name, ""); } catch (e) { toast(errMsg(e)); } }, "small danger", "delj:" + j.id)));
-  });
-  return [
-    keyed(h("div", { class: "bar" }, h("span", { class: "count", text: `${S.journals.length}개` }), h("span", { class: "grow" }), addBtn), "bar", String(S.journals.length)),
-    keyed(h("div", { style: "overflow-x:auto" }, h("table", { class: "t" }, h("thead", null, h("tr", null, [...J_FIELDS.map(x => x[1]), "상태", ""].map(x => h("th", { text: x })))), h("tbody", null, rows))),
-      "table", sigOf([S.journals, Object.keys(S.dirty).filter(k => k.startsWith("journals/")).map(k => [k, S.dirty[k]]), S.journals.map(j => S.armed["delj:" + j.id] > Date.now())]))
-  ];
+  const journals = S.journals.filter(j => j.kind !== "check");
+  const checks = S.journals.filter(j => j.kind === "check").sort((a, b) => (a.stage || "").localeCompare(b.stage || "") || (a.order || 0) - (b.order || 0));
+  const target = journals.find(j => j.status === "확정") || journals[0];
+  const nodes = [];
+  const total = checks.length, doneN = checks.filter(c => c.done).length;
+  nodes.push(keyed(h("div", { class: "bar" },
+    h("span", { class: "count", text: `투고 자료 완료 ${doneN} / ${total}` }),
+    h("span", { class: "muted", style: "font-size:12px", text: "단계를 누르면 펼쳐지고, 항목을 누르면 저널 요건과 지금 상태가 보입니다." })), "bar", sigOf([doneN, total])));
+  if (target) {
+    const path = "journals/" + target.id;
+    const label = "타겟 저널: " + (target.name || "");
+    const card = h("div", { class: "card" },
+      h("div", { class: "card-head" },
+        h("span", { style: "font-weight:700;font-size:16px", text: target.name || "(이름 없음)" }),
+        h("span", { class: "muted", text: target.publisher || "" }),
+        h("span", { class: "grow" }),
+        h("span", { class: "meta", text: target.updatedBy ? `마지막 수정 ${target.updatedBy} · ${fmt(target.updatedAt)}` : "" })),
+      h("details", { class: "src", open: S.open.has("jinfo") ? true : null, ontoggle: e => { if (e.target.open) S.open.add("jinfo"); else S.open.delete("jinfo"); saveOpen(); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
+        h("summary", { text: S.open.has("jinfo") ? "저널 요건 요약 (누르면 접힘)" : "저널 요건 요약 · " + cut(firstLine(target.limits), 90) }),
+        J_INFO.map(([fk, fl]) => h("div", null, h("div", { class: "meta", style: "margin:8px 0 2px", text: fl }), editArea(path, fk, target[fk], label, fl)))));
+    nodes.push(keyed(card, "target", sigOf([target, S.open.has("jinfo"), J_INFO.map(([fk]) => S.dirty[path + "#" + fk])])));
+  }
+  for (const [sk, title, sub] of J_STAGES) {
+    const list = checks.filter(c => c.stage === sk);
+    const dn = list.filter(c => c.done).length;
+    const open = stageOpen(sk);
+    const addBtn = h("button", { class: "small", text: "항목 추가", onclick: async () => {
+      const order = Math.max(0, ...list.map(c => c.order || 0)) + 1;
+      try { await addDoc(collection(db, "journals"), { kind: "check", stage: sk, order, title: "새 항목", req: "", now: "", owner: "", due: "", done: false, note: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: myName() }); await writeLog("투고 자료 추가", title, "", "", ""); }
+      catch (e) { toast("추가 실패: " + errMsg(e)); }
+    } });
+    const card = h("details", { class: "card", open: open ? true : null, ontoggle: e => { setStageOpen(sk, e.target.open); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
+      h("summary", { style: "cursor:pointer;display:flex;flex-wrap:wrap;gap:10px;align-items:baseline" },
+        h("span", { style: "font-weight:700", text: title }),
+        h("span", { class: "count", style: "font-size:12px;color:" + (list.length && dn === list.length ? "var(--ok,#047857)" : "var(--muted)"), text: `완료 ${dn} / ${list.length}` }),
+        h("span", { class: "muted", style: "font-size:12px", text: sub })),
+      list.map(checkRow),
+      h("div", { style: "margin-top:8px" }, addBtn));
+    nodes.push(keyed(card, "stage:" + sk, sigOf([list, open, ownerOptions(), list.map(c => [S.open.has("jitem:" + c.id), S.armed["delj:" + c.id] > Date.now()]),
+      Object.keys(S.dirty).filter(k => list.some(c => k.startsWith("journals/" + c.id + "#"))).map(k => [k, S.dirty[k]])])));
+  }
+  return nodes;
 }
 
 /* ---------- 메모·자료 ---------- */
@@ -598,8 +663,14 @@ function buildMarkdown(withDocs) {
   for (const it of S.items) L.push("\n" + itemMarkdown(it));
   L.push("\n## 할 일·일정");
   for (const t of S.tasks) L.push(`- [${t.done ? "x" : " "}] ${(t.text || "").replace(/\n/g, " ")} (담당: ${t.owner || "미지정"}, 기한: ${t.due || "-"})${t.note ? " - " + t.note.replace(/\n/g, " ") : ""}`);
-  L.push("\n## 후보 저널");
-  for (const j of S.journals) L.push(`- ${j.name || "(이름 없음)"} [${j.status || "후보"}] 출판사: ${j.publisher || "-"} / 범위: ${j.scope || "-"} / 형식: ${j.format || "-"} / 제한: ${j.limits || "-"} / 메모: ${j.note || "-"}`);
+  L.push("\n## 타겟 저널");
+  for (const j of S.journals.filter(x => x.kind !== "check")) L.push(`- ${j.name || "(이름 없음)"} [${j.status || "후보"}] 출판사: ${j.publisher || "-"} / 분야: ${j.scope || "-"} / 유형·투고: ${j.format || "-"} / 요건: ${j.limits || "-"} / 비용·안내: ${j.note || "-"}`);
+  for (const [sk, title] of J_STAGES) {
+    const list = S.journals.filter(c => c.kind === "check" && c.stage === sk).sort((a, b) => (a.order || 0) - (b.order || 0));
+    if (!list.length) continue;
+    L.push(`\n### 투고 자료 ${title}`);
+    for (const c of list) L.push(`- [${c.done ? "x" : " "}] ${c.title || ""} (담당: ${c.owner || "미지정"}${c.due ? ", 기한: " + c.due : ""})\n  - 저널 요건: ${(c.req || "-").replace(/\n/g, " ")}\n  - 지금 상태: ${(c.now || "-").replace(/\n/g, " ")}${c.note ? "\n  - 메모: " + c.note.replace(/\n/g, " ") : ""}`);
+  }
   const pins = S.chat.filter(m => m.pinned);
   if (pins.length) { L.push("\n## 결정 사항"); for (const m of pins) L.push(`- ${m.name} (${fmt(m.at)}): ${m.text.replace(/\n/g, " ")}`); }
   const ms = msMarkdownSummary();
