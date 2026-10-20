@@ -24,7 +24,7 @@ export function catOf(f) {
   return "etc";
 }
 const extOf = name => (name.split(".").pop() || "").toLowerCase();
-const figSub = name => { const x = extOf(name); return x === "ppt" || x === "pptx" ? "PPT" : x === "pdf" ? "PDF" : x === "tif" || x === "tiff" ? "TIF" : ""; };
+const figSub = name => { const x = extOf(name); return x === "ppt" || x === "pptx" ? "PPT" : x === "pdf" ? "PDF" : x === "tif" || x === "tiff" ? "TIFF" : ""; };
 const pad = n => String(n).padStart(2, "0");
 const pkgName = () => { const d = new Date(); return `InfoMat 제출자료 ${String(d.getFullYear()).slice(2)}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`; };
 
@@ -53,7 +53,7 @@ function pkgCheck(list) {
   const has = (re, x) => root.some(n => re.test(n) && extOf(n) === x);
   const docs = [["Manuscript", /manuscript|원고/i], ["TOC", /toc/i], ["Cover letter", /cover/i]].map(([n, re]) => ({ n, docx: has(re, "docx"), pdf: has(re, "pdf") }));
   const count = pre => list.filter(it => it.out.startsWith(pre)).length;
-  return { docs, ppt: count("Figure/PPT/"), pdf: count("Figure/PDF/"), tif: count("Figure/TIF/"),
+  return { docs, ppt: count("Figure/PPT/"), pdf: count("Figure/PDF/"), tiff: count("Figure/TIFF/"),
     sub: count("Permission/제출용/"), oa: count("Permission/대비용/Open Access/"), extra: list.filter(it => /^Permission\/대비용\/[^/]+$/.test(it.out)).length };
 }
 
@@ -125,10 +125,10 @@ function renderPkgCard() {
   const mark = ok => ok ? "있음" : "없음";
   const lines = [
     ...c.docs.map(d => `${d.n}: Word ${mark(d.docx)} · PDF ${mark(d.pdf)}`),
-    `Figure: PPT ${c.ppt}/${FIG_N} · PDF ${c.pdf}/${FIG_N} · TIF ${c.tif}/${FIG_N}`,
+    `Figure: PPT ${c.ppt}/${FIG_N} · PDF ${c.pdf}/${FIG_N} · TIFF ${c.tiff}/${FIG_N}`,
     `Permission: 제출용 ${c.sub}개 · 대비용 Open Access ${c.oa}개 · 대비용 기록 ${c.extra}개`
   ];
-  const missing = c.docs.some(d => !d.docx || !d.pdf) || c.ppt < FIG_N || c.pdf < FIG_N || c.tif < FIG_N || !c.extra;
+  const missing = c.docs.some(d => !d.docx || !d.pdf) || c.ppt < FIG_N || c.pdf < FIG_N || c.tiff < FIG_N || !c.extra;
   const card = h("div", { class: "card" },
     h("div", { class: "bar" },
       h("strong", { text: `교수님 제출용 통합 폴더: ${name}` }),
@@ -170,7 +170,7 @@ export function renderFilesTab() {
   const mapPath = T.dir ? (rel, f) => sub === "fig" ? T.dir + (figSub(f.name) ? figSub(f.name) + "/" : "") + f.name : sub === "im" ? T.dir + f.name : T.dir + rel : null;
   return nodes.concat(renderFiles({
     key: sub, filter: f => catOf(f) === sub, mapPath, noDrop: !T.dir,
-    dropNote: sub === "fig" ? "Figure/PPT, Figure/PDF, Figure/TIF 중 확장자에 맞는 폴더에 저장됩니다. 같은 경로·같은 크기의 파일은 건너뜁니다."
+    dropNote: sub === "fig" ? "Figure/PPT, Figure/PDF, Figure/TIFF 중 확장자에 맞는 폴더에 저장됩니다. 같은 경로·같은 크기의 파일은 건너뜁니다."
       : sub === "im" ? "InfoMat 투고 자료 폴더에 저장됩니다. 같은 이름·같은 크기의 파일은 건너뜁니다."
       : T.dir ? `${T.dir.slice(0, -1)} 폴더 아래에 고른 폴더 구조 그대로 저장됩니다. 같은 경로·같은 크기의 파일은 건너뜁니다.` : "",
     groupOf: sub === "im" ? () => "" : f => T.dir && f.path.startsWith(T.dir) ? (f.folder || "").slice(T.dir.length) : (f.folder || ""),
