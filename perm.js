@@ -1,7 +1,7 @@
-import { S, h, toast, errMsg, lsGet, lsSet, scheduleRender, keyed, sigOf } from "./core.js?v=15";
-import { renderFiles, queueUploads, getFileURL, fileByPath, downloadBlob } from "./files.js?v=15";
+import { S, h, toast, errMsg, scheduleRender, keyed, sigOf } from "./core.js?v=15";
+import { queueUploads, getFileURL, fileByPath, downloadBlob } from "./files.js?v=15";
 
-/* 자료실 > 퍼미션. 자료실 파일 경로: 퍼미션/Fig.N(x)_permission.pdf, 퍼미션/OA/Fig.N(x)_OA.pdf
+/* 자료실 > Permission. 자료실 파일 경로: 퍼미션/Fig.N(x)_permission.pdf, 퍼미션/OA/Fig.N(x)_OA.pdf, 퍼미션/대비용/(저자 연락 기록 등)
    ref 번호는 InfoMat 타겟 원고(2026-10-19 저장본) 기준 */
 const DIR = "퍼미션/";
 const R = (p, ref, paper, pub, no) => ({ p, ref, paper, pub, no });
@@ -130,14 +130,17 @@ function table(key, title, rows, oa, cols) {
       h("td", { class: "nowrap" }, fileButtons(r, oa))))))), "pm:" + key, sig);
 }
 
+/* Permission 폴더나 Permission_보관 폴더를 고르면 파일 이름과 위치로 나눠 올린다. APR_이전은 건너뛴다 */
 function onPick(fileList) {
-  const ok = /^Fig\.\d+\([a-z]\)_(permission|OA)\.pdf$/;
   const list = [];
   let skipped = 0;
   for (const f of fileList) {
     const parts = (f.webkitRelativePath || f.name).split("/");
-    if (parts.includes("APR_이전") || !ok.test(f.name)) { skipped++; continue; }
-    list.push({ file: f, path: f.name.endsWith("_OA.pdf") ? DIR + "OA/" + f.name : DIR + f.name });
+    if (parts.includes("APR_이전") || !/\.pdf$/i.test(f.name)) { skipped++; continue; }
+    if (/^Fig\.\d+\([a-z]\)_OA\.pdf$/.test(f.name)) list.push({ file: f, path: DIR + "OA/" + f.name });
+    else if (/^Fig\.\d+\([a-z]\)_permission\.pdf$/.test(f.name)) list.push({ file: f, path: DIR + f.name });
+    else if (parts.some(p => p === "저자 연락 기록" || p === "대비용")) list.push({ file: f, path: DIR + "대비용/" + f.name });
+    else skipped++;
   }
   if (list.length) queueUploads(list);
   toast(`퍼미션 파일 ${list.length}개를 올립니다. 해당 없는 파일 ${skipped}개는 건너뜁니다.`, 5000);
@@ -156,22 +159,19 @@ export function renderPerm() {
       h("span", { class: "count", text: `자료실에 올라간 파일 ${have}/${ALL_PATHS.length}개` }),
       ups.length ? h("span", { class: "muted", text: ` · 올리기 ${upDone}/${ups.length}${upFail ? ` · 실패 ${upFail}` : ""}` }) : null,
       h("span", { class: "grow" }),
-      h("label", { class: "btn", title: "Permission 폴더를 고르면 Fig.N(x)_permission.pdf와 OA/Fig.N(x)_OA.pdf만 올리고 APR_이전 폴더는 건너뜁니다." },
-        "Permission 폴더 올리기", h("input", { type: "file", multiple: true, webkitdirectory: true, hidden: true, onchange: e => { onPick(e.target.files); e.target.value = ""; } }))));
+      h("label", { class: "btn", title: "Permission 폴더나 Permission_보관 폴더를 고르면 제출용 퍼미션, Open Access 증빙, 저자 연락 기록을 나눠 올리고 APR_이전 폴더는 건너뜁니다." },
+        "폴더 올리기", h("input", { type: "file", multiple: true, webkitdirectory: true, hidden: true, onchange: e => { onPick(e.target.files); e.target.value = ""; } }))));
   const nodes = [keyed(head, "pm:head", sigOf([have, ups.map(u => [u.path, u.state])]))];
   const cols = [["그림 패널", r => r.p.join(", ")], ["ref", r => r.ref], ["논문", r => r.paper]];
   nodes.push(table("sub", "제출용 퍼미션", SUB, false,
     [...cols, ["출판사", r => r.pub], ["라이선스 번호", r => r.no]]));
   nodes.push(table("oa", "Open Access (퍼미션 불필요)", OA, true,
     [...cols, ["라이선스", r => r.pub]]));
+  const extra = S.files.filter(f => f.complete && f.path.startsWith(DIR + "대비용/")).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  nodes.push(keyed(h("div", { class: "folder" }, h("table", { class: "t files" },
+    h("thead", null, h("tr", null, h("th", { colspan: 2, text: "대비용 기록 (저자 연락 메일 등)" }))),
+    h("tbody", null, extra.length ? extra.map(f => h("tr", null, h("td", { class: "fname", text: f.name }),
+      h("td", { class: "nowrap" }, h("button", { class: "small", text: "열기", onclick: () => openPath(f.path) }))))
+      : h("tr", null, h("td", { colspan: 2, class: "muted", text: "아직 없습니다. Permission_보관 폴더를 올리면 저자 연락 기록 폴더의 파일이 여기에 들어갑니다." }))))), "pm:extra", sigOf(extra.map(f => f.id))));
   return nodes;
-}
-
-/* 자료실 탭: 파일 / 퍼미션 하위 탭 */
-export function renderFilesTab() {
-  const sub = S.filesSub || lsGet("filesSub") || "files";
-  const bar = keyed(h("div", { class: "bar" }, h("div", { class: "seg" },
-    [["files", "파일"], ["perm", "퍼미션"]].map(([k, label]) => h("button", { class: sub === k ? "on" : "", text: label,
-      onclick: () => { S.filesSub = k; lsSet("filesSub", k); scheduleRender(); } })))), "fsub", sub);
-  return [bar, ...(sub === "perm" ? renderPerm() : renderFiles(DIR))];
 }
