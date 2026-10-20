@@ -1,6 +1,6 @@
 import {
   S, h, db, toast, fmt, errMsg, myName, writeLog, scheduleRender, confirmButton, keyed, sigOf, patchChildren,
-  doc, getDocs, setDoc, updateDoc, deleteDoc, collection, serverTimestamp, writeBatch, Bytes
+  doc, getDocs, setDoc, updateDoc, deleteDoc, collection, query, limit, serverTimestamp, writeBatch, Bytes
 } from "./core.js?v=15";
 
 export const CHUNK = 900000;
@@ -106,11 +106,23 @@ async function openFile(meta) {
 }
 async function deleteFile(meta) {
   try {
-    const snap = await getDocs(collection(db, "files", meta.id, "chunks"));
-    let batch = writeBatch(db), n = 0;
-    for (const d of snap.docs) { batch.delete(d.ref); if (++n % 400 === 0) { await batch.commit(); batch = writeBatch(db); } }
-    batch.delete(doc(db, "files", meta.id));
-    await batch.commit();
+    /* 조각 하나가 최대 900 KB라, 한 번에 많이 지우면 Firestore 한 묶음 한도(10 MiB)를 넘어 "Transaction too big"이 난다.
+       조각 번호로 바로 지우고(내용을 내려받지 않음), 8개씩 나눠 지운다. 파일 정보 문서는 조각을 다 지운 뒤 마지막에 지운다. */
+    const BATCH = 8;
+    const n = Math.max(1, meta.chunks || 0);
+    for (let i = 0; i < n; i += BATCH) {
+      const batch = writeBatch(db);
+      for (let k = i; k < Math.min(n, i + BATCH); k++) batch.delete(doc(db, "files", meta.id, "chunks", String(k).padStart(6, "0")));
+      await batch.commit();
+    }
+    for (;;) {
+      const rest = await getDocs(query(collection(db, "files", meta.id, "chunks"), limit(BATCH)));
+      if (rest.empty) break;
+      const batch = writeBatch(db);
+      rest.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
+    await deleteDoc(doc(db, "files", meta.id));
     urlCache.delete(meta.path);
     await writeLog("파일 삭제", meta.path, "", "", "");
   } catch (e) { toast("삭제 실패: " + errMsg(e)); }
