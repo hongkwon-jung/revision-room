@@ -497,13 +497,12 @@ function renderTasks() {
   ];
 }
 
-/* ---------- 타겟 저널 (v18) ---------- */
-/* journals 컬렉션: 저널 문서(kind 없음)와 투고 파일 항목(kind: "check")을 함께 둔다. 파일 항목은 stage(s1~s3)와 order로 정렬하고, spec에 파일 형식·화질을 적는다 */
+/* ---------- 타겟 저널 (v19) ---------- */
+/* journals 컬렉션: 저널 문서(kind 없음)와 투고 파일 항목(kind: "check")을 함께 둔다. 파일 항목은 stage(s1~s2)와 order로 정렬하고, spec에 파일 형식·화질을 적는다 */
 const J_INFO = [["format", "원고 유형·투고 방법"], ["limits", "분량·형식 요건"], ["scope", "분야"], ["note", "비용·라이선스·공식 안내"]];
 const J_STAGES = [
   ["s1", "1. 투고할 때", "준비해서 Wiley Authors에 올리는 파일"],
-  ["s2", "2. 수정본 낼 때", "심사 결과를 받은 뒤 내는 파일"],
-  ["s3", "3. 수락 후", "편집국이 요청하면 내는 파일"]
+  ["s2", "2. 수정본 낼 때", "심사 결과를 받은 뒤 내는 파일"]
 ];
 function firstLine(s) { return (String(s || "").split("\n").find(x => x.trim()) || "").trim(); }
 function stageOpen(sk) { return S.open.has("jstage:" + sk) || (sk === "s1" && !S.open.has("jstage-closed:s1")); }
@@ -546,21 +545,13 @@ function renderJournals() {
   const nodes = [];
   const total = checks.length, doneN = checks.filter(c => c.done).length;
   nodes.push(keyed(h("div", { class: "bar" },
-    h("span", { class: "count", text: `투고 파일 준비 완료 ${doneN} / ${total}` }),
-    h("span", { class: "muted", style: "font-size:12px", text: "파일마다 형식·화질이 옆에 보입니다. 누르면 저널 요건과 지금 상태가 펼쳐집니다." })), "bar", sigOf([doneN, total])));
+    h("span", { class: "count", text: `투고 파일 준비 완료 ${doneN} / ${total}` })), "bar", sigOf([doneN, total])));
   if (target) {
-    const path = "journals/" + target.id;
-    const label = "타겟 저널: " + (target.name || "");
     const card = h("div", { class: "card" },
       h("div", { class: "card-head" },
         h("span", { style: "font-weight:700;font-size:16px", text: target.name || "(이름 없음)" }),
-        h("span", { class: "muted", text: target.publisher || "" }),
-        h("span", { class: "grow" }),
-        h("span", { class: "meta", text: target.updatedBy ? `마지막 수정 ${target.updatedBy} · ${fmt(target.updatedAt)}` : "" })),
-      h("details", { class: "src", open: S.open.has("jinfo") ? true : null, ontoggle: e => { if (e.target.open) S.open.add("jinfo"); else S.open.delete("jinfo"); saveOpen(); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
-        h("summary", { text: S.open.has("jinfo") ? "저널 요건 요약 (누르면 접힘)" : "저널 요건 요약 · " + cut(firstLine(target.limits), 90) }),
-        J_INFO.map(([fk, fl]) => h("div", null, h("div", { class: "meta", style: "margin:8px 0 2px", text: fl }), editArea(path, fk, target[fk], label, fl)))));
-    nodes.push(keyed(card, "target", sigOf([target, S.open.has("jinfo"), J_INFO.map(([fk]) => S.dirty[path + "#" + fk])])));
+        h("span", { class: "muted", text: target.publisher || "" })));
+    nodes.push(keyed(card, "target", sigOf([target.name, target.publisher])));
   }
   for (const [sk, title, sub] of J_STAGES) {
     const list = checks.filter(c => c.stage === sk);
