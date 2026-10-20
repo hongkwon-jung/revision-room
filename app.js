@@ -497,15 +497,13 @@ function renderTasks() {
   ];
 }
 
-/* ---------- 타겟 저널 (v17) ---------- */
-/* journals 컬렉션: 저널 문서(kind 없음)와 투고 자료 점검 항목(kind: "check")을 함께 둔다. 점검 항목은 stage(s1~s5)와 order로 정렬한다 */
+/* ---------- 타겟 저널 (v18) ---------- */
+/* journals 컬렉션: 저널 문서(kind 없음)와 투고 파일 항목(kind: "check")을 함께 둔다. 파일 항목은 stage(s1~s3)와 order로 정렬하고, spec에 파일 형식·화질을 적는다 */
 const J_INFO = [["format", "원고 유형·투고 방법"], ["limits", "분량·형식 요건"], ["scope", "분야"], ["note", "비용·라이선스·공식 안내"]];
 const J_STAGES = [
-  ["s1", "1. 투고 전 준비", "팀이 만들고 점검할 자료"],
-  ["s2", "2. 투고할 때", "Wiley Authors 시스템에 올리고 입력할 것"],
-  ["s3", "3. 심사·수정", "결정을 받은 뒤 낼 것"],
-  ["s4", "4. 수락 후", "출판 절차, 주로 교신저자가 처리"],
-  ["s5", "5. 출판 후", "공유와 게시"]
+  ["s1", "1. 투고할 때", "준비해서 Wiley Authors에 올리는 파일"],
+  ["s2", "2. 수정본 낼 때", "심사 결과를 받은 뒤 내는 파일"],
+  ["s3", "3. 수락 후", "편집국이 요청하면 내는 파일"]
 ];
 function firstLine(s) { return (String(s || "").split("\n").find(x => x.trim()) || "").trim(); }
 function stageOpen(sk) { return S.open.has("jstage:" + sk) || (sk === "s1" && !S.open.has("jstage-closed:s1")); }
@@ -516,19 +514,21 @@ function setStageOpen(sk, open) {
 }
 function checkRow(c) {
   const path = "journals/" + c.id;
-  const label = "투고 자료: " + (c.title || "");
+  const label = "투고 파일: " + (c.title || "");
   const ik = "jitem:" + c.id;
   const lab = t => h("div", { class: "meta", style: "margin:8px 0 2px", text: t });
   return h("details", { style: "border-top:1px solid var(--line);padding:6px 2px" + (c.done ? ";opacity:.75" : ""), open: S.open.has(ik) ? true : null,
     ontoggle: e => { if (e.target.open) S.open.add(ik); else S.open.delete(ik); saveOpen(); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
-    h("summary", { style: "cursor:pointer;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline" },
+    h("summary", { style: "cursor:pointer;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline" },
       h("input", { type: "checkbox", checked: !!c.done, title: "완료", onclick: e => e.stopPropagation(), onchange: e => setField(path, "done", e.target.checked, label, "완료", !!c.done) }),
       h("span", { style: "font-weight:600" + (c.done ? ";text-decoration:line-through" : ""), text: c.title || "(제목 없음)" }),
-      h("span", { class: "muted", style: "flex:1;min-width:200px;font-size:13px", text: cut(firstLine(c.now), 90) }),
+      h("span", { style: "flex:1;min-width:200px;font-size:13px", text: firstLine(c.spec) }),
       c.owner ? h("span", { class: "meta", text: "담당 " + c.owner }) : null,
-      c.due ? h("span", { class: "meta", text: "기한 " + c.due }) : null),
+      c.due ? h("span", { class: "meta", text: "기한 " + c.due }) : null,
+      firstLine(c.now) ? h("span", { class: "muted", style: "flex-basis:100%;padding-left:24px;font-size:12px", text: "지금: " + cut(firstLine(c.now), 110) }) : null),
     h("div", { style: "padding:2px 0 6px 26px" },
-      lab("자료 이름"), editInput(path, "title", c.title, label, "자료 이름", { style: "width:100%" }),
+      lab("파일"), editInput(path, "title", c.title, label, "파일", { style: "width:100%" }),
+      lab("형식·화질"), editArea(path, "spec", c.spec, label, "형식·화질"),
       lab("저널 요건"), editArea(path, "req", c.req, label, "저널 요건"),
       lab("지금 상태"), editArea(path, "now", c.now, label, "지금 상태"),
       h("div", { style: "display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px" },
@@ -536,7 +536,7 @@ function checkRow(c) {
         h("span", { class: "meta", text: "기한" }), editInput(path, "due", c.due, label, "기한", { type: "date" }),
         h("span", { class: "grow" }),
         h("span", { class: "meta", text: c.updatedBy ? `마지막 수정 ${c.updatedBy} · ${fmt(c.updatedAt)}` : "" }),
-        confirmButton("삭제", async () => { try { await deleteDoc(doc(db, "journals", c.id)); await writeLog("투고 자료 삭제", label, "", c.title, ""); } catch (e) { toast(errMsg(e)); } }, "small danger", "delj:" + c.id)),
+        confirmButton("삭제", async () => { try { await deleteDoc(doc(db, "journals", c.id)); await writeLog("투고 파일 삭제", label, "", c.title, ""); } catch (e) { toast(errMsg(e)); } }, "small danger", "delj:" + c.id)),
       lab("메모"), editArea(path, "note", c.note, label, "메모")));
 }
 function renderJournals() {
@@ -546,8 +546,8 @@ function renderJournals() {
   const nodes = [];
   const total = checks.length, doneN = checks.filter(c => c.done).length;
   nodes.push(keyed(h("div", { class: "bar" },
-    h("span", { class: "count", text: `투고 자료 완료 ${doneN} / ${total}` }),
-    h("span", { class: "muted", style: "font-size:12px", text: "단계를 누르면 펼쳐지고, 항목을 누르면 저널 요건과 지금 상태가 보입니다." })), "bar", sigOf([doneN, total])));
+    h("span", { class: "count", text: `투고 파일 준비 완료 ${doneN} / ${total}` }),
+    h("span", { class: "muted", style: "font-size:12px", text: "파일마다 형식·화질이 옆에 보입니다. 누르면 저널 요건과 지금 상태가 펼쳐집니다." })), "bar", sigOf([doneN, total])));
   if (target) {
     const path = "journals/" + target.id;
     const label = "타겟 저널: " + (target.name || "");
@@ -568,7 +568,7 @@ function renderJournals() {
     const open = stageOpen(sk);
     const addBtn = h("button", { class: "small", text: "항목 추가", onclick: async () => {
       const order = Math.max(0, ...list.map(c => c.order || 0)) + 1;
-      try { await addDoc(collection(db, "journals"), { kind: "check", stage: sk, order, title: "새 항목", req: "", now: "", owner: "", due: "", done: false, note: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: myName() }); await writeLog("투고 자료 추가", title, "", "", ""); }
+      try { await addDoc(collection(db, "journals"), { kind: "check", stage: sk, order, title: "새 파일", spec: "", req: "", now: "", owner: "", due: "", done: false, note: "", createdAt: serverTimestamp(), updatedAt: serverTimestamp(), updatedBy: myName() }); await writeLog("투고 파일 추가", title, "", "", ""); }
       catch (e) { toast("추가 실패: " + errMsg(e)); }
     } });
     const card = h("details", { class: "card", open: open ? true : null, ontoggle: e => { setStageOpen(sk, e.target.open); if (e.target.open) e.target.querySelectorAll("textarea.auto").forEach(autosize); } },
@@ -668,8 +668,8 @@ function buildMarkdown(withDocs) {
   for (const [sk, title] of J_STAGES) {
     const list = S.journals.filter(c => c.kind === "check" && c.stage === sk).sort((a, b) => (a.order || 0) - (b.order || 0));
     if (!list.length) continue;
-    L.push(`\n### 투고 자료 ${title}`);
-    for (const c of list) L.push(`- [${c.done ? "x" : " "}] ${c.title || ""} (담당: ${c.owner || "미지정"}${c.due ? ", 기한: " + c.due : ""})\n  - 저널 요건: ${(c.req || "-").replace(/\n/g, " ")}\n  - 지금 상태: ${(c.now || "-").replace(/\n/g, " ")}${c.note ? "\n  - 메모: " + c.note.replace(/\n/g, " ") : ""}`);
+    L.push(`\n### 투고 파일 ${title}`);
+    for (const c of list) L.push(`- [${c.done ? "x" : " "}] ${c.title || ""} (담당: ${c.owner || "미지정"}${c.due ? ", 기한: " + c.due : ""})\n  - 형식·화질: ${(c.spec || "-").replace(/\n/g, " ")}\n  - 저널 요건: ${(c.req || "-").replace(/\n/g, " ")}\n  - 지금 상태: ${(c.now || "-").replace(/\n/g, " ")}${c.note ? "\n  - 메모: " + c.note.replace(/\n/g, " ") : ""}`);
   }
   const pins = S.chat.filter(m => m.pinned);
   if (pins.length) { L.push("\n## 결정 사항"); for (const m of pins) L.push(`- ${m.name} (${fmt(m.at)}): ${m.text.replace(/\n/g, " ")}`); }
